@@ -187,14 +187,9 @@ func main() {
 
 		delta, err := getDelta(body["delta"])
 		if err != nil {
-			log.Println("heyhey 1")
 			return err
 		}
 
-		// if err := write(kv, delta); err != nil {
-		// 	log.Println("heyhey 2")
-		// 	return err
-		// }
 		wg.Add(1)
 		go write(n, kv, delta)
 		var ret map[string]any = map[string]any{}
