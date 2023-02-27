@@ -1,4 +1,4 @@
-module github.com/isaacoh92/maelstrom-challenge/maelstrom-utils
+module github.com/isaacoh92/maelstrom-challenge/maelstrom-utils/utils
 
 go 1.19
 
