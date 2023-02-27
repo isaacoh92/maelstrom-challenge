@@ -6,7 +6,7 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-func handleTopologyV2(nodes []string, level int) map[string][]string {
+func HandleTopology(nodes []string, level int) map[string][]string {
 	// use indexed priority queue because IPQs are cool :)
 	size := len(nodes)
 	if level >= size {
