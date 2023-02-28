@@ -16,17 +16,16 @@ const counterKey = "counter"
 
 var (
 	topology       map[string][]string
-	topMux         sync.RWMutex // only used for topology
 	wg             sync.WaitGroup
 	mux            sync.RWMutex
 	counter        int
 	counterChanged bool
+	setupOnce      sync.Once
 )
 
 func init() {
 	wg = sync.WaitGroup{}
 	mux = sync.RWMutex{}
-	topMux = sync.RWMutex{}
 	counter = 0
 }
 
@@ -44,7 +43,7 @@ func setCounter(val int) {
 	mux.Unlock()
 }
 
-func handleTopology(nodes []string, level int) {
+func generateTopology(nodes []string, level int) map[string][]string {
 	// use indexed priority queue because IPQs are cool :)
 	size := len(nodes)
 	if level >= size {
@@ -134,7 +133,7 @@ func handleTopology(nodes []string, level int) {
 		values[im[0]]--
 		sink(0)
 	}
-	topology = top
+	return top
 }
 
 func write(n *maelstrom.Node, kv *maelstrom.KV, delta int) {
@@ -154,7 +153,6 @@ func write(n *maelstrom.Node, kv *maelstrom.KV, delta int) {
 
 func broadcast(node *maelstrom.Node, neighbor string, body map[string]any) {
 	defer wg.Done()
-
 	respCh := make(chan maelstrom.Message)
 	if err := node.RPC(neighbor, body, func(m maelstrom.Message) error {
 		respCh <- m
@@ -204,18 +202,7 @@ func main() {
 			return err
 		}
 
-		var ok bool
-		topMux.RLock()
-		ok = topology != nil
-		topMux.RUnlock()
-		if !ok {
-			level := len(n.NodeIDs()) - 1 // requires a rather high degree of connectivity
-			log.Println("number of nodes: ", len(n.NodeIDs()))
-			log.Println("configured degree of connectivity: ", level)
-			topMux.Lock()
-			handleTopology(n.NodeIDs(), level)
-			topMux.Unlock()
-		}
+		setupTopology(n.NodeIDs())
 		body["type"] = "read_ok"
 		body["value"] = getCounter()
 		return n.Reply(msg, body)
@@ -264,7 +251,8 @@ func broadcastCounter(node *maelstrom.Node) {
 		mux.RUnlock()
 
 		if send {
-			for _, neighbor := range topology[node.ID()] {
+			for _, n := range topology[node.ID()] {
+				neighbor := n
 				wg.Add(1)
 				go broadcast(node, neighbor, map[string]any{
 					"type":    "broadcast",
@@ -278,4 +266,11 @@ func broadcastCounter(node *maelstrom.Node) {
 		counterChanged = false
 		mux.Unlock()
 	}
+}
+
+func setupTopology(nodeIDs []string) {
+	setupOnce.Do(func() {
+		level := len(nodeIDs) - 1 // requires a rather high degree of connectivity
+		topology = generateTopology(nodeIDs, level)
+	})
 }
