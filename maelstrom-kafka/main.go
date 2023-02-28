@@ -6,7 +6,6 @@ import (
 	"fmt"
 	logger "log"
 	"sync"
-	"time"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -38,10 +37,17 @@ func main() {
 		}
 
 		wg.Add(1)
-		result := make(chan int)
-		go writeLog(n, kv, body.Key, body.Message, result)
+		resultChannel := make(chan int)
+		errorChannel := make(chan error)
+		go writeLog(n, kv, body.Key, body.Message, resultChannel, errorChannel)
 
-		offset := <-result
+		var offset int
+		select {
+		case o := <-resultChannel:
+			offset = o
+		case err := <-errorChannel:
+			return err
+		}
 
 		n.Reply(msg, map[string]any{
 			"type":   "send_ok",
@@ -64,8 +70,14 @@ func main() {
 		result := map[string][][]int{}
 
 		for key, value := range body.Offsets {
-			offset, _ := getMessage(value)
-			messages := readLog(n, kv, key, offset)
+			offset, err := getInt(value)
+			if err != nil {
+				return err
+			}
+			messages, err := readLog(n, kv, key, offset)
+			if err != nil {
+				return err
+			}
 			result[key] = messages
 		}
 		n.Reply(msg, map[string]any{
@@ -86,7 +98,10 @@ func main() {
 			return err
 		}
 		for key, value := range body.Offsets {
-			offset, _ := getMessage(value)
+			offset, err := getInt(value)
+			if err != nil {
+				return err
+			}
 			wg.Add(1)
 			go writeCommittedOffset(n, kv, key, offset)
 		}
@@ -121,7 +136,6 @@ func main() {
 	if err := n.Run(); err != nil {
 		logger.Fatal(err)
 	}
-	time.Sleep(10 * time.Millisecond)
 	wg.Wait()
 }
 
@@ -150,7 +164,7 @@ type Log struct {
 	Messages [][]int `json:"messages"`
 }
 
-func writeLog(n *maelstrom.Node, kv *maelstrom.KV, key string, message int, resultChannel chan int) {
+func writeLog(n *maelstrom.Node, kv *maelstrom.KV, key string, message int, resultChannel chan int, errorChannel chan error) {
 	defer wg.Done()
 	kvKey := key
 	var log Log
@@ -162,7 +176,8 @@ func writeLog(n *maelstrom.Node, kv *maelstrom.KV, key string, message int, resu
 		}
 	} else {
 		if jsonErr := json.Unmarshal([]byte(committed.(string)), &log); jsonErr != nil {
-			logger.Fatal(jsonErr)
+			errorChannel <- jsonErr
+			return
 		}
 	}
 
@@ -171,20 +186,21 @@ func writeLog(n *maelstrom.Node, kv *maelstrom.KV, key string, message int, resu
 
 	newEntry, err := json.Marshal(log)
 	if err != nil {
-		logger.Fatal(err)
+		errorChannel <- err
+		return
 	}
 
 	if e := kv.CompareAndSwap(context.Background(), kvKey, committed, string(newEntry), true); e != nil {
 		logger.Println("rewriting due to contention...")
 		wg.Add(1)
-		go writeLog(n, kv, key, message, resultChannel)
+		go writeLog(n, kv, key, message, resultChannel, errorChannel)
 		return
 	}
 
 	resultChannel <- log.Offset
 }
 
-func readLog(n *maelstrom.Node, kv *maelstrom.KV, key string, offset int) [][]int {
+func readLog(n *maelstrom.Node, kv *maelstrom.KV, key string, offset int) ([][]int, error) {
 	var log Log
 	kvKey := key
 	committed, err := kv.Read(context.Background(), kvKey)
@@ -195,11 +211,10 @@ func readLog(n *maelstrom.Node, kv *maelstrom.KV, key string, offset int) [][]in
 		}
 	} else {
 		if jsonErr := json.Unmarshal([]byte(committed.(string)), &log); jsonErr != nil {
-			logger.Fatal(jsonErr)
+			return nil, jsonErr
 		}
 	}
-
-	return getLogsFromOffset(&log, offset)
+	return getLogsFromOffset(&log, offset), nil
 }
 
 func getLogsFromOffset(logs *Log, offset int) [][]int {
@@ -214,12 +229,11 @@ func getLogsFromOffset(logs *Log, offset int) [][]int {
 		if include {
 			result = append(result, []int{m[0], m[1]})
 		}
-
 	}
 	return result
 }
 
-func getMessage(m any) (int, error) {
+func getInt(m any) (int, error) {
 	var delta int
 	switch v := m.(type) {
 	case int:
