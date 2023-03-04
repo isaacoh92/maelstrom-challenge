@@ -6,13 +6,14 @@ import (
 	"sync"
 	"time"
 
+	topology "github.com/isaacoh92/maelstrom-challenge/maelstrom-utils/topology"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 var (
-	topology map[string][]string
-	counter  *Counter
-	once     sync.Once
+	top     map[string][]string
+	counter *Counter
+	once    sync.Once
 )
 
 func main() {
@@ -72,18 +73,22 @@ func main() {
 func setup(node *maelstrom.Node) {
 	once.Do(func() {
 		counter = InitCounter(node.ID())
-		topology = GenerateTopology(node.NodeIDs(), len(node.NodeIDs())-1)
+		var err error
+		top, err = topology.GenerateTopology(node.NodeIDs(), len(node.NodeIDs())-1)
+		if err != nil {
+			log.Fatal(err)
+		}
 	})
 }
 
 func broadcastCounter(node *maelstrom.Node) {
 	for range time.Tick(time.Millisecond * 1000) {
-		if counter == nil || topology == nil {
+		if counter == nil || top == nil {
 			continue
 		}
 		counter.Mux.Lock()
 		if counter.Changed {
-			for _, n := range topology[node.ID()] {
+			for _, n := range top[node.ID()] {
 				node.Send(n, map[string]any{
 					"type":     "broadcast",
 					"counters": counter.Counters,
