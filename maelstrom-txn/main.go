@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"log"
-	logger "log"
 	"sync"
 	"time"
 
@@ -15,17 +14,7 @@ var (
 	kv   *KV
 	top  map[string][]string
 	once sync.Once
-	wg   sync.WaitGroup
-	mux  sync.RWMutex
-	raft *Raft
 )
-
-const dbKey = "database"
-
-func init() {
-	wg = sync.WaitGroup{}
-	mux = sync.RWMutex{}
-}
 
 func main() {
 	n := maelstrom.NewNode()
@@ -77,7 +66,7 @@ func main() {
 	})
 
 	if err := n.Run(); err != nil {
-		logger.Fatal(err)
+		log.Fatal(err)
 	}
 }
 
