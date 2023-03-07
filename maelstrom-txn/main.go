@@ -156,7 +156,10 @@ func setup(node *maelstrom.Node) {
 }
 func broadcastMessage() {
 	for range time.Tick(time.Millisecond * 1000) {
-		log.Println("hello world")
+		if raft == nil {
+			continue
+		}
+		raft.Logf("hello world")
 	}
 }
 

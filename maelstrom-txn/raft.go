@@ -63,21 +63,30 @@ func (m *Map) Apply(operation []any) ([]any, error) {
 }
 
 type Raft struct {
-	Mux   sync.RWMutex
-	State Map // TODO Map might need its own lock ?
-	Node  *maelstrom.Node
-	Role  int
-	term  int
-	Votes StringSet
-	// Acks                  StringSet
-	VotedFor              string
-	Leader                string
-	CheckElectionTicker   time.Duration
-	StepDownTicker        time.Duration
-	LeaderHeartbeatTicker time.Duration
-	StepDownTimeout       time.Duration
-	ElectionDeadline      time.Time
-	StepDownDeadline      time.Time
+	mux      sync.RWMutex
+	state    Map // TODO Map might need its own lock ?
+	logs     *Logs
+	node     *maelstrom.Node
+	role     int
+	term     int
+	votes    StringSet
+	votedFor string
+	leader   string
+
+	sufficientAcks  bool
+	sufficientVotes bool
+
+	// Tickers for ongoing processes
+	checkElectionTicker   time.Duration
+	stepDownTicker        time.Duration
+	leaderHeartbeatTicker time.Duration
+
+	// Timeouts
+	stepDownTimeout time.Duration
+
+	// Deadlines
+	electionDeadline time.Time
+	stepDownDeadline time.Time
 }
 
 /*
@@ -92,17 +101,18 @@ func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return err
 	}
-	r.Mux.Lock()
+	r.Lock(0)
+	defer r.Unlock(0)
 	txs := []any{}
 	for _, txn := range req["txn"].([]any) {
-		res, err := r.State.Apply(txn.([]any))
+		res, err := r.state.Apply(txn.([]any))
 		if err != nil {
 			return err
 		}
 		txs = append(txs, res)
 	}
-	r.Mux.Unlock()
-	return r.Node.Reply(msg, map[string]any{
+
+	return r.node.Reply(msg, map[string]any{
 		"type": "txn_ok",
 		"txn":  txs,
 	})
@@ -110,20 +120,22 @@ func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
 
 func InitRaft(node *maelstrom.Node) *Raft {
 	r := &Raft{
-		Mux:                   sync.RWMutex{},
-		State:                 Map{Data: map[int]int{}},
-		Node:                  node,
-		Role:                  ROLE_FOLLOWER,
+		mux:                   sync.RWMutex{},
+		state:                 Map{Data: map[int]int{}},
+		logs:                  InitLogs(),
+		node:                  node,
+		role:                  ROLE_FOLLOWER,
 		term:                  0,
-		Votes:                 StringSet{Items: map[string]bool{}},
-		VotedFor:              "",
-		Leader:                "",
-		CheckElectionTicker:   10,
-		StepDownTicker:        100,
-		LeaderHeartbeatTicker: 500,
-		StepDownTimeout:       2000,
-		ElectionDeadline:      time.Now().Add(generateRandomTimeout(150, 300)),
-		StepDownDeadline:      time.Now(),
+		votes:                 StringSet{Items: map[string]bool{}},
+		votedFor:              "",
+		leader:                "",
+		sufficientAcks:        false,
+		checkElectionTicker:   10,
+		stepDownTicker:        100,
+		leaderHeartbeatTicker: 500,
+		stepDownTimeout:       2000,
+		electionDeadline:      time.Now().Add(generateRandomTimeout(150, 300)),
+		stepDownDeadline:      time.Now(),
 	}
 	go r.ScheduleCandidate()
 	go r.ScheduleAppendEntries()
@@ -140,108 +152,110 @@ func generateRandomTimeout(min int, max int) time.Duration {
 }
 
 func (r *Raft) ResetElectionDeadline() {
-	// r.Mux.Lock()
-	r.ElectionDeadline = time.Now().Add(generateRandomTimeout(150, 300))
-	// r.Mux.Unlock()
+	r.electionDeadline = time.Now().Add(generateRandomTimeout(150, 300))
 }
 
 func (r *Raft) ResetStepDownDeadline() {
-	// r.Mux.Lock()
-	r.Log("resetting step down deadline")
-	r.StepDownDeadline = time.Now().Add(r.StepDownTimeout * time.Millisecond)
-	// r.Mux.Unlock()
+	r.Logf("resetting step down deadline")
+	r.stepDownDeadline = time.Now().Add(r.stepDownTimeout * time.Millisecond)
 }
 
-func (r *Raft) Log(message string, params ...any) {
+func (r *Raft) Logf(message string, params ...any) {
 	log.Println(fmt.Sprintf("%v: %s", time.Now().UnixMilli()-epoch, fmt.Sprintf(message, params...)))
 }
 
+func (r *Raft) Lock(i int) {
+	r.Logf("locking %d", i)
+	r.mux.Lock()
+}
+
+func (r *Raft) Unlock(i int) {
+	r.Logf("unlocking %d", i)
+	r.mux.Unlock()
+}
 func (r *Raft) AdvanceTerm(term int) {
 	if term < r.term {
-		r.Log("Aborting advance term. Current term %d; previous term %d", r.term, term)
+		r.Logf("Aborting advance term. Current term %d; previous term %d", r.term, term)
 	}
 	r.term = term
 }
 
 func (r *Raft) AssignRole(role int) {
-	r.Role = role
+	r.role = role
 }
 
 func (r *Raft) ElectLeader(leader string) {
-	r.Leader = leader
+	r.leader = leader
 }
 
 func (r *Raft) ClearVotes() {
-	r.Votes.Clear()
+	r.votes.Clear()
 }
 
-// func (r *Raft) ClearAcks() {
-// 	r.Acks.Clear()
-// }
-
 func (r *Raft) IsLeader() bool {
-	return r.Role == ROLE_LEADER
+	return r.role == ROLE_LEADER
 }
 
 func (r *Raft) IsCandidate() bool {
-	return r.Role == ROLE_CANDIDATE
+	return r.role == ROLE_CANDIDATE
 }
 
 func (r *Raft) IsFollower() bool {
-	return r.Role == ROLE_FOLLOWER
+	return r.role == ROLE_FOLLOWER
 }
 
 // When a node becomes a candidate, a new election term is started and the node votes for itself
 // TODO: send out Request Vote message to other nodes
 func (r *Raft) BecomeCandidate() {
-	r.Mux.Lock()
+	r.Lock(1)
 	r.ResetElectionDeadline()
 	// r.ResetStepDownDeadline()
 	r.ClearVotes()
 	// r.ClearAcks()
-	r.VotedFor = r.Node.ID()
+	r.votedFor = r.node.ID()
+	r.sufficientVotes = false
 	r.ElectLeader("") // remove anyone we may have been following
 	r.AssignRole(ROLE_CANDIDATE)
-	r.CollectVote(r.Node.ID())
+	r.CollectVote(r.node.ID())
 	r.AdvanceTerm(r.term + 1)
-	r.Log("Became candidate. Starting new term %d", r.term)
-	r.Mux.Unlock()
+	r.Logf("Became candidate. Starting new term %d", r.term)
+	r.Unlock(1)
 
 	r.RequestVotes()
 }
 
 func (r *Raft) BecomeFollower(leader string, term int) {
-	r.Mux.Lock()
-	defer r.Mux.Unlock()
+	r.Lock(2)
+	defer r.Unlock(2)
 	r.ElectLeader(leader)
 	r.AdvanceTerm(term)
 	r.ClearVotes()
 	// r.ClearAcks()
-	r.VotedFor = ""
+	r.votedFor = ""
 	r.AssignRole(ROLE_FOLLOWER)
 	r.ResetElectionDeadline()
 
-	r.Log("became follower to %s for term %d", leader, r.term)
+	r.Logf("became follower to %s for term %d", leader, r.term)
 }
 
 func (r *Raft) BecomeLeader() {
-	r.Mux.Lock()
-	defer r.Mux.Unlock()
+	r.Lock(3)
+	defer r.Unlock(3)
 
-	r.Log("starting become leader process")
+	r.Logf("starting become leader process")
 	if r.IsFollower() {
-		r.Log("We decided to follow someone else on this term... abort becoming a leader")
+		r.Logf("We decided to follow someone else on this term... abort becoming a leader")
 		return
 	}
 	r.ResetStepDownDeadline()
 	r.ResetElectionDeadline()
-	r.ElectLeader(r.Node.ID()) // TODO: empty string or self?
+	r.ElectLeader(r.node.ID()) // TODO: empty string or self?
 	r.ClearVotes()
 	// r.ClearAcks()
-	r.VotedFor = ""
+	r.votedFor = ""
 	r.AssignRole(ROLE_LEADER)
 
-	r.Log("became leader on term %d", r.term)
+	r.Logf("became leader on term %d", r.term)
 }
 
 // broadcasts to other nodes
@@ -251,8 +265,8 @@ func (r *Raft) RequestVotes() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*1000)
 	defer cancel()
 
-	for _, node := range r.Node.NodeIDs() {
-		if node == r.Node.ID() {
+	for _, node := range r.node.NodeIDs() {
+		if node == r.node.ID() {
 			continue
 		}
 		go r.RequestVote(ctx, node, done)
@@ -260,36 +274,40 @@ func (r *Raft) RequestVotes() {
 
 	select {
 	case <-done:
-		r.Log("done! got enough votes")
+		r.Logf("done! got enough votes")
 		r.BecomeLeader()
 		return
 
 	case <-ctx.Done(): // Didn't receive enough acks in time
-		r.Log("failed to collect votes in time")
+		r.Logf("failed to collect votes in time")
 	}
 }
 
 func (r *Raft) MaybeStepDown(term int) {
 	if r.Term() < term {
-		r.Log("Stepping down because we see a larger term %d than our term %d", term, r.Term())
+		r.Logf("Stepping down because we see a larger term %d than our term %d", term, r.Term())
 		r.BecomeFollower("", term)
 	}
 }
 
 func (r *Raft) RequestVote(ctx context.Context, peer string, done chan bool) error {
 	responseChannel := make(chan maelstrom.Message)
+	r.mux.RLock()
 	request := map[string]any{
-		"type":      "request_vote",
-		"term":      r.Term(),
-		"candidate": r.Node.ID(),
+		"type":           "request_vote",
+		"term":           r.term,
+		"candidate":      r.node.ID(),
+		"last_log_term":  r.logs.LastLogTerm(),
+		"last_log_index": r.logs.Size(),
 	}
+	r.mux.RUnlock()
 
 	// Async RPC request
-	if err := r.Node.RPC(peer, request, func(m maelstrom.Message) error {
+	if err := r.node.RPC(peer, request, func(m maelstrom.Message) error {
 		responseChannel <- m
 		return nil
 	}); err != nil {
-		r.Log("Request vote to peer %s errored: %v", peer, err)
+		r.Logf("Request vote to peer %s errored: %v", peer, err)
 		return err
 	}
 
@@ -298,38 +316,42 @@ func (r *Raft) RequestVote(ctx context.Context, peer string, done chan bool) err
 
 		var response VoteMessage
 		if jsonErr := json.Unmarshal(msg.Body, &response); jsonErr != nil {
-			r.Log("vote response from peer %s invalid: %v", peer, jsonErr)
+			r.Logf("vote response from peer %s invalid: %v", peer, jsonErr)
 			return jsonErr
 		}
-		r.Log("Received vote response from peer %s: %v", peer, response)
+		r.Logf("Received vote response from peer %s: %v", peer, response)
 
 		r.MaybeStepDown(response.Term)
 
 		// peer voted for us!
-		if response.VoteGranted {
-			r.Mux.Lock()
-			defer r.Mux.Unlock()
+		r.Lock(5)
+		defer r.Unlock(5)
+		if response.VoteGranted && r.IsCandidate() && !r.sufficientVotes {
+
 			r.CollectVote(peer)
 			r.ResetStepDownDeadline()
 			if r.HasMajorityVotes() {
-				r.Log("Has majority votes")
+				r.Logf("Has majority votes")
+				r.sufficientVotes = true
 				done <- true
 			}
 			return nil
 		}
 
 	case <-ctx.Done():
-		r.Log("closing vote request due to parent context reaching deadline...")
+		r.Logf("closing vote request due to parent context reaching deadline...")
 	}
 
 	return nil
 }
 
 type VoteMessage struct {
-	Type        string `json:"type"`
-	Candidate   string `json:"candidate,omitempty"`
-	Term        int    `json:"term"`
-	VoteGranted bool   `json:"vote_granted,omitempty"`
+	Type         string `json:"type"`
+	Candidate    string `json:"candidate,omitempty"`
+	Term         int    `json:"term"`
+	LastLogTerm  int    `json:"last_log_term"`
+	LastLogIndex int    `json:"last_log_index"`
+	VoteGranted  bool   `json:"vote_granted,omitempty"`
 }
 
 type AckMessage struct {
@@ -346,31 +368,30 @@ type AckMessage struct {
 // }
 
 func (r *Raft) HasMajorityVotes() bool {
-	// r.Mux.RLock()
-	majority := r.Votes.Length() >= len(r.Node.NodeIDs())/2+1
-	// r.Mux.RUnlock()
+	// r.mux.RLock()
+	majority := r.votes.Length() >= len(r.node.NodeIDs())/2+1
+	// r.mux.RUnlock()
 	return majority
 }
 
 func (r *Raft) HasMajorityAcks(acks *[]string) bool {
-	// r.Mux.RLock()
-	majority := len(*acks) >= len(r.Node.NodeIDs())/2+1
-	r.Log("Has majority %v", majority)
-	// r.Mux.RUnlock()
+	//r.mux.RLock()
+	//defer r.mux.RUnlock()
+	majority := len(*acks) >= len(r.node.NodeIDs())/2+1
+	r.Logf("Has majority %v", majority)
+
 	return majority
 }
 
 func (r *Raft) CollectVote(node string) {
-	// r.Mux.Lock()
 	switch {
 	case r.IsLeader():
-		r.Log("Already role leader, ignoring AddVote request")
+		r.Logf("Already role leader, ignoring AddVote request")
 	case r.IsFollower():
-		r.Log("Not a candidate, ignoring AddVote request")
+		r.Logf("Not a candidate, ignoring AddVote request")
 	case r.IsCandidate():
-		r.Votes.Add(node)
+		r.votes.Add(node)
 	}
-	// r.Mux.Unlock()
 }
 
 // If this node hasn't voted yet in this term, then it votes for the candidate
@@ -379,26 +400,40 @@ func (r *Raft) SubmitVote(msg maelstrom.Message) error {
 
 	var request VoteMessage
 	if jsonErr := json.Unmarshal(msg.Body, &request); jsonErr != nil {
-		r.Log("malformed vote request %s", msg.Body)
+		r.Logf("malformed vote request %s", msg.Body)
 		return nil
 	}
-	r.Log("Received a request to vote for %s", request.Candidate)
+	r.Logf("Received a request to vote for %s", request.Candidate)
 
 	r.MaybeStepDown(request.Term)
-	r.Log("about to start")
+	r.Logf("about to start")
 	var grant bool
-	r.Mux.Lock()
+	r.Lock(6)
 	// TODO: add log sizes and log terms to our conditions
 	if request.Term < r.term {
-		r.Log("Not voting for %s because term %d is less than ours %d", request.Candidate, request.Term, r.term)
-	} else if r.VotedFor != "" {
-		r.Log("Not voting for %s because already voted for %s on term %d", request.Candidate, r.VotedFor, r.term)
+		r.Logf("Not voting for %s because term %d is less than ours %d", request.Candidate, request.Term, r.term)
+	} else if r.votedFor != "" {
+		r.Logf("Not voting for %s because already voted for %s on term %d", request.Candidate, r.votedFor, r.term)
+	} else if request.LastLogTerm < r.logs.LastLogTerm() {
+		r.Logf(
+			"Not voting for %s because our logs have entries from term %d, which is newer than remote term %d",
+			request.Candidate,
+			r.logs.LastLogTerm(),
+			request.LastLogTerm,
+		)
+	} else if request.LastLogTerm == r.logs.LastLogTerm() && request.LastLogIndex < r.logs.Size() {
+		r.Logf(
+			"Not voting for %s because even though last log terms are the same, our log size of %d is bigger than remotes of %d",
+			request.Candidate,
+			r.logs.Size(),
+			request.LastLogIndex,
+		)
 	} else {
 		grant = true
-		r.VotedFor = request.Candidate
+		r.votedFor = request.Candidate
 		r.term = request.Term
 		r.ResetElectionDeadline()
-		r.Log("Granting vote to %s", request.Candidate)
+		r.Logf("Granting vote to %s", request.Candidate)
 	}
 
 	response := VoteMessage{
@@ -406,82 +441,68 @@ func (r *Raft) SubmitVote(msg maelstrom.Message) error {
 		Term:        r.term,
 		VoteGranted: grant,
 	}
-	r.Mux.Unlock()
+	r.Unlock(6)
 
-	// jsonResponse, jsonErr := json.Marshal(response)
-	// if jsonErr != nil {
-	// 	r.Log("submite vote json marshal err %v", jsonErr)
-	// 	return jsonErr
-	// }
-	return r.Node.Reply(msg, response)
+	return r.node.Reply(msg, response)
 }
 
 func (r *Raft) VoteForCandidate(candidate string, term int) {
-	r.Mux.Lock()
+	r.Lock(4)
 	r.AdvanceTerm(term)
 	r.ClearVotes()
-	// r.ClearAcks()
 	r.ElectLeader("")
-	r.VotedFor = candidate
+	r.votedFor = candidate
 	r.AssignRole(ROLE_FOLLOWER)
 	r.ResetElectionDeadline()
-	r.Mux.Unlock()
+	r.Unlock(4)
 
-	r.Log("Voting for candidate %s", candidate)
+	r.Logf("Voting for candidate %s", candidate)
 }
 
-var appendCounter int = 0
-var appendLock sync.RWMutex = sync.RWMutex{}
-
 func (r *Raft) AppendEntries() {
-	appendLock.Lock()
-	appendCounter++
-	counter := appendCounter
-	appendLock.Unlock()
-	r.Log("goroutine %d", counter)
-	r.Mux.RLock()
+	r.mux.Lock()
 	isLeader := r.IsLeader()
-	r.Mux.RUnlock()
+	r.sufficientAcks = false
+	r.mux.Unlock()
 
-	r.Log("isleader?")
+	r.Logf("isleader?")
 	if !isLeader {
-		r.Log("not going to append entries because we're not a leader")
+		r.Logf("not going to append entries because we're not a leader")
 		return
 	}
-	r.Log("create context?")
+	r.Logf("create context?")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*1000)
 	defer cancel()
 	done := make(chan bool)
 	// acks := StringSet{
 	// 	Items: map[string]bool{},
 	// }
-	acks := []string{r.Node.ID()}
-	for _, node := range r.Node.NodeIDs() {
-		if node == r.Node.ID() {
+	acks := []string{r.node.ID()}
+	for _, node := range r.node.NodeIDs() {
+		if node == r.node.ID() {
 			continue
 		}
-		r.Log("going to append entry to node %s", node)
+		r.Logf("going to append entry to node %s", node)
 		go r.AppendEntry(ctx, node, &acks, done)
 	}
 
-	r.Log("sent acks?")
+	r.Logf("sent acks?")
 
 	select {
 	case <-done:
-		r.Log("done! got majority acks")
-		r.Mux.Lock()
+		r.Logf("done! got majority acks")
+		r.Lock(7)
 		r.ResetStepDownDeadline()
-		r.Mux.Unlock()
+		r.Unlock(7)
 		return
 	case <-ctx.Done():
-		r.Log("goroutine done %d", counter)
-		r.Log("Didn't receive acks from followers in time... stepping down %d", counter)
+		r.Logf("Didn't receive acks from followers in time... stepping down")
 	}
 }
 
 func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, done chan bool) error {
 	if !r.IsLeader() {
-		r.Log("not going to append this entry because we're not a leader")
+		r.Logf("not going to append this entry because we're not a leader")
 		// done <- false
 		return nil
 	}
@@ -490,15 +511,15 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 	request := map[string]any{
 		"type": "append_entries",
 		"term": r.Term(),
-		"src":  r.Node.ID(),
+		"src":  r.node.ID(),
 	}
 	// Async RPC request
-	r.Log("sending append entry request to node %s", peer)
-	if err := r.Node.RPC(peer, request, func(m maelstrom.Message) error {
+	r.Logf("sending append entry request to node %s", peer)
+	if err := r.node.RPC(peer, request, func(m maelstrom.Message) error {
 		responseChannel <- m
 		return nil
 	}); err != nil {
-		r.Log("Append entry to peer %s errored: %v", peer, err)
+		r.Logf("Append entry to peer %s errored: %v", peer, err)
 		return err
 	}
 
@@ -507,26 +528,29 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 	case msg := <-responseChannel:
 		var response AckMessage
 		if jsonErr := json.Unmarshal(msg.Body, &response); jsonErr != nil {
-			r.Log("vote response from peer %s invalid: %v", peer, jsonErr)
+			r.Logf("vote response from peer %s invalid: %v", peer, jsonErr)
 			return jsonErr
 		}
 		r.MaybeStepDown(response.Term)
 		// receive ack from peer
-		if response.Ack {
-			r.Log("Received ack from peer %s", peer)
-			r.Mux.Lock()
-			defer r.Mux.Unlock()
+		r.Lock(8)
+		defer r.Unlock(8)
+		if response.Ack && r.IsLeader() && !r.sufficientAcks {
+			r.Logf("Received ack from peer %s", peer)
+			//r.Lock(8)
+			//r.Unlock(8)
 			// acks.Add(response.Source)
 
 			*acks = append(*acks, response.Source)
-			r.Log("ACK Length %d", len(*acks))
+			r.Logf("ACK Length %d", len(*acks))
 			if r.HasMajorityAcks(acks) {
+				r.sufficientAcks = true
 				done <- true
 			}
 		}
-		return nil
+		//return nil
 	case <-ctx.Done():
-		r.Log("parent context for append entry timed out when sending to %s", peer)
+		r.Logf("parent context for append entry timed out when sending to %s", peer)
 	}
 
 	// var response map[string]any
@@ -537,15 +561,15 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 func (r *Raft) ReceiveAppendEntries(msg maelstrom.Message) error {
 	var request AckMessage
 	if jsonErr := json.Unmarshal(msg.Body, &request); jsonErr != nil {
-		r.Log("malformed append entries request %s", msg.Body)
+		r.Logf("malformed append entries request %s", msg.Body)
 		return nil
 	}
 	currentTerm := r.Term()
-	r.Log("received append entries request from %s", request.Source)
+	r.Logf("received append entries request from %s", request.Source)
 	// r.MaybeStepDown(request.Term)
 	var ack bool
 	if request.Term >= currentTerm {
-		r.Log("append_entries request term %d >= our current term %d", request.Term, currentTerm)
+		r.Logf("append_entries request term %d >= our current term %d", request.Term, currentTerm)
 		r.BecomeFollower(request.Source, request.Term)
 		ack = true
 	}
@@ -560,27 +584,27 @@ func (r *Raft) ReceiveAppendEntries(msg maelstrom.Message) error {
 	// if jsonErr != nil {
 	// 	return jsonErr
 	// }
-	r.Log("responding back to append_entries request")
-	return r.Node.Reply(msg, response)
+	r.Logf("responding back to append_entries request")
+	return r.node.Reply(msg, response)
 }
 
 // Use for when a read lock is required
 func (r *Raft) Term() int {
-	r.Mux.RLock()
-	defer r.Mux.RUnlock()
+	r.mux.RLock()
+	defer r.mux.RUnlock()
 	return r.term
 }
 
 // After the election timeout, a follower becomes a candidate and starts a new election term
 func (r *Raft) ScheduleCandidate() {
-	for range time.Tick(time.Millisecond * r.CheckElectionTicker) {
-		if time.Now().After(r.ElectionDeadline) {
-			r.Log("scheduling to become candidate...%v", r.IsLeader())
+	for range time.Tick(time.Millisecond * r.checkElectionTicker) {
+		if time.Now().After(r.electionDeadline) {
+			r.Logf("scheduling to become candidate...%v", r.IsLeader())
 
 			if r.IsLeader() {
-				r.Mux.Lock()
+				r.Lock(9)
 				r.ResetElectionDeadline()
-				r.Mux.Unlock()
+				r.Unlock(9)
 				return
 			}
 
@@ -588,49 +612,49 @@ func (r *Raft) ScheduleCandidate() {
 			r.BecomeCandidate()
 		}
 	}
-	r.Log("schedule candidate ticker is finishing... wonder why?")
+	r.Logf("schedule candidate ticker is finishing... wonder why?")
 }
 
 // As a leader, we must constantly ping our followers
 func (r *Raft) ScheduleAppendEntries() {
-	for range time.Tick(time.Millisecond * r.LeaderHeartbeatTicker) {
-		r.Log("scheduling append entries")
+	for range time.Tick(time.Millisecond * r.leaderHeartbeatTicker) {
+		r.Logf("scheduling append entries")
 		r.AppendEntries()
 	}
-	r.Log("append entries ticker is finishing... wonder why?")
+	r.Logf("append entries ticker is finishing... wonder why?")
 }
 
 func (r *Raft) ScheduleStepDownAsLeader() {
-	for range time.Tick(time.Millisecond * r.StepDownTicker) {
-		r.Mux.Lock()
-		r.Log("step down time check; now: %v; deadline: %v IS %v AND %v", time.Now(), r.StepDownDeadline, time.Now().After(r.StepDownDeadline), r.IsLeader())
-		cond := time.Now().After(r.StepDownDeadline) && r.IsLeader()
-		r.Mux.Unlock()
+	for range time.Tick(time.Millisecond * r.stepDownTicker) {
+		r.Lock(10)
+		r.Logf("step down time check; now: %v; deadline: %v IS %v AND %v", time.Now(), r.stepDownDeadline, time.Now().After(r.stepDownDeadline), r.IsLeader())
+		cond := time.Now().After(r.stepDownDeadline) && r.IsLeader()
+		r.Unlock(10)
 		if cond {
-			r.Log("Haven't received Acks recently, Stepping down as leader...")
+			r.Logf("Haven't received Acks recently, Stepping down as leader...")
 			r.BecomeFollower("", r.Term())
 		}
 	}
-	r.Log("step down as leader ticker is finishing... wonder why?")
+	r.Logf("step down as leader ticker is finishing... wonder why?")
 }
 
 // // peer did not vote for us :(
 // switch {
-// case response.Term == currentTerm && response.Leader != "": // peer designated a leader already, then that leader reached majority vote before us...follow that node then
-// 	r.Log("term from peer is the same but peer has a leader already... following its leader")
-// 	r.BecomeFollower(response.Leader, response.Term)
+// case response.Term == currentTerm && response.leader != "": // peer designated a leader already, then that leader reached majority vote before us...follow that node then
+// 	r.Logf("term from peer is the same but peer has a leader already... following its leader")
+// 	r.BecomeFollower(response.leader, response.Term)
 // 	done <- false
 // 	return nil
 // 	// otherwise, our peer voted for someone else... continue with the voting process. Let's see if we can get leader before other candidates
 
-// case response.Term > currentTerm && response.Leader != "":
-// 	r.Log("term from peer %s is greater than current term: %d, and peer has leader.. so following it", peer, currentTerm)
-// 	r.BecomeFollower(response.Leader, response.Term)
+// case response.Term > currentTerm && response.leader != "":
+// 	r.Logf("term from peer %s is greater than current term: %d, and peer has leader.. so following it", peer, currentTerm)
+// 	r.BecomeFollower(response.leader, response.Term)
 // 	done <- false
 // 	return nil
 
-// case response.Term > currentTerm && response.Leader == "":
-// 	r.Log("term from peer %s is greater than current term: %d, but peer does not have a leader, must be voting: %s", peer, currentTerm, response.VotedFor)
+// case response.Term > currentTerm && response.leader == "":
+// 	r.Logf("term from peer %s is greater than current term: %d, but peer does not have a leader, must be voting: %s", peer, currentTerm, response.votedFor)
 // 	r.BecomeFollower("", currentTerm) // something went wrong, but let's step down as candidate, and no need to follow anyone yet
 // 	// TODO: or should we also vote for this peer's voted_for? ... probably not
 // 	done <- false
