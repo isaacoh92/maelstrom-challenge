@@ -4,15 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	// "log"
 	logger "log"
 	"sync"
+	"time"
 
+	"github.com/isaacoh92/maelstrom-challenge/maelstrom-utils/topology"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 var (
-	wg  sync.WaitGroup
-	mux sync.RWMutex
+	wg   sync.WaitGroup
+	mux  sync.RWMutex
+	once sync.Once
+	top  map[string][]string
 )
 
 func init() {
@@ -20,11 +26,24 @@ func init() {
 	mux = sync.RWMutex{}
 }
 
+func setup(node *maelstrom.Node) {
+	once.Do(func() {
+		var err error
+		top, err = topology.GenerateTopology(node.NodeIDs(), len(node.NodeIDs())-1)
+		if err != nil {
+			logger.Fatal(err)
+		}
+	})
+}
+
 func main() {
 	n := maelstrom.NewNode()
 	kv := maelstrom.NewLinKV(n)
 
+	go broadcastDatabase(n)
+
 	n.Handle("send", func(msg maelstrom.Message) error {
+		setup(n)
 		type request struct {
 			Type    string `json:"type"`
 			Key     string `json:"key"`
@@ -58,6 +77,7 @@ func main() {
 	})
 
 	n.Handle("poll", func(msg maelstrom.Message) error {
+		setup(n)
 		type request struct {
 			Type    string         `json:"type"`
 			Offsets map[string]any `json:"offsets"`
@@ -131,6 +151,16 @@ func main() {
 			"type":    "list_committed_offsets_ok",
 			"offsets": result,
 		})
+		return nil
+	})
+
+	n.Handle("sync", func(msg maelstrom.Message) error {
+		return n.Reply(msg, map[string]any{
+			"type": "sync_ok",
+		})
+	})
+
+	n.Handle("sync_ok", func(msg maelstrom.Message) error {
 		return nil
 	})
 	if err := n.Run(); err != nil {
@@ -244,4 +274,21 @@ func getInt(m any) (int, error) {
 		return delta, fmt.Errorf("unsupported type %T", v)
 	}
 	return delta, nil
+}
+
+func broadcastDatabase(node *maelstrom.Node) {
+	for range time.Tick(time.Millisecond * 1000) {
+		if top == nil {
+			continue
+		}
+
+		for _, n := range top[node.ID()] {
+			m, _ := node.SyncRPC(context.Background(), n, map[string]any{
+				"type": "sync",
+			})
+			var resp map[string]any
+			json.Unmarshal(m.Body, &resp)
+			logger.Println("isaac here", resp)
+		}
+	}
 }
