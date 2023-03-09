@@ -27,6 +27,7 @@ func (r *Raft) AdvanceTerm(term int, lock ...bool) {
 	}
 	if term < r.term {
 		r.Logf("Aborting advance term. Current term %d; previous term %d", r.term, term)
+		return
 	}
 	r.term = term
 }

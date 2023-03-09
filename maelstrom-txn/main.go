@@ -80,35 +80,6 @@ var (
 )
 
 func main() {
-	// flag.Parse()
-	go broadcastMessage()
-	// cpuprofile := &cpu
-	// memprofile := &mem
-	// if *cpuprofile != "" {
-	// 	f, err := os.Create(*cpuprofile)
-	// 	if err != nil {
-	// 		log.Fatal("could not create CPU profile: ", err)
-	// 	}
-	// 	defer f.Close() // error handling omitted for example
-	// 	if err := pprof.StartCPUProfile(f); err != nil {
-	// 		log.Fatal("could not start CPU profile: ", err)
-	// 	}
-	// 	defer pprof.StopCPUProfile()
-	// }
-
-	// // ... rest of the program ...
-
-	// if *memprofile != "" {
-	// 	f, err := os.Create(*memprofile)
-	// 	if err != nil {
-	// 		log.Fatal("could not create memory profile: ", err)
-	// 	}
-	// 	defer f.Close() // error handling omitted for example
-	// 	runtime.GC()    // get up-to-date statistics
-	// 	if err := pprof.WriteHeapProfile(f); err != nil {
-	// 		log.Fatal("could not write memory profile: ", err)
-	// 	}
-	// }
 	n := maelstrom.NewNode()
 	// kv := maelstrom.NewLinKV(n)
 	// raft = InitRaft(n)
@@ -141,7 +112,6 @@ func main() {
 	if err := n.Run(); err != nil {
 		log.Fatal(err)
 	}
-	// wg.Wait()
 }
 
 func setup(node *maelstrom.Node) {
@@ -153,14 +123,6 @@ func setup(node *maelstrom.Node) {
 		}
 		raft = InitRaft(node)
 	})
-}
-func broadcastMessage() {
-	for range time.Tick(time.Millisecond * 1000) {
-		if raft == nil {
-			continue
-		}
-		raft.Logf("hello world")
-	}
 }
 
 func broadcastDatabase(node *maelstrom.Node) {

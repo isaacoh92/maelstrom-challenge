@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 // Accessors
 
 func (r *Raft) IsLeader(lock ...bool) bool {
@@ -68,4 +70,12 @@ func (r *Raft) HasSufficientVotes(lock ...bool) bool {
 		defer r.mux.RUnlock()
 	}
 	return r.sufficientVotes
+}
+
+func (r *Raft) ElectionDeadlineExceeded(lock ...bool) bool {
+	if len(lock) != 0 && lock[0] {
+		r.mux.RLock()
+		defer r.mux.RUnlock()
+	}
+	return time.Now().After(r.electionDeadline)
 }
