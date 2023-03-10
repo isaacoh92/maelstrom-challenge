@@ -2,21 +2,22 @@ package main
 
 import (
 	"encoding/json"
+	rft "github.com/isaacoh92/maelstrom-challenge/maelstrom-utils/raft"
+	"github.com/isaacoh92/maelstrom-challenge/maelstrom-utils/topology"
+	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 	"log"
 	"sync"
 	"time"
-
-	"github.com/isaacoh92/maelstrom-challenge/maelstrom-utils/topology"
-	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 var (
 	kv   *KV
 	top  map[string][]string
 	once sync.Once
+	raft *rft.Raft
 )
 
-func main() {
+func ReadCommitted() {
 	n := maelstrom.NewNode()
 	go broadcastDatabase(n)
 	kv = InitKV()
@@ -70,6 +71,34 @@ func main() {
 	}
 }
 
+func StrictSerializable() {
+	n := maelstrom.NewNode()
+
+	n.Handle("txn", func(msg maelstrom.Message) error {
+		setupRaft(n)
+		return raft.HandleClientRequest(msg)
+	})
+
+	n.Handle("request_vote", func(msg maelstrom.Message) error {
+		setupRaft(n)
+		return raft.SubmitVote(msg)
+	})
+
+	n.Handle("append_entries", func(msg maelstrom.Message) error {
+		setupRaft(n)
+		return raft.ReceiveAppendEntries(msg)
+	})
+
+	if err := n.Run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func main() {
+	ReadCommitted()
+	//StrictSerializable()
+}
+
 func setup(node *maelstrom.Node) {
 	once.Do(func() {
 		var err error
@@ -77,6 +106,12 @@ func setup(node *maelstrom.Node) {
 		if err != nil {
 			log.Fatal(err)
 		}
+	})
+}
+
+func setupRaft(node *maelstrom.Node) {
+	once.Do(func() {
+		raft = rft.InitRaft(node)
 	})
 }
 
