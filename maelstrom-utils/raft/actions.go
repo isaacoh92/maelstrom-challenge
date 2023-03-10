@@ -405,6 +405,7 @@ func (r *Raft) Commit(operation any) (any, error) {
 		Term:      r.term,
 		Operation: operation,
 	})
+	r.Logf("commit logs %s", r.logs.PrintLogs())
 
 	r.commitIndex++
 	return r.stateMachine.Apply(operation)
