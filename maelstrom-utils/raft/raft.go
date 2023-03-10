@@ -64,16 +64,12 @@ func (m *Map) Apply(op any) (any, error) {
 	}
 }
 
-//type StateMachine interface {
-//	Apply(any) (any, error)
-//}
-
 type Raft struct {
 	mux  sync.RWMutex
 	wait sync.WaitGroup
 
 	// components
-	stateMachine Map // TODO Map might need its own lock ?
+	stateMachine Map
 	logs         *Logs
 	node         *maelstrom.Node
 
@@ -136,7 +132,6 @@ type AppendEntryRequest struct {
 	PrevLogTerm  int    `json:"prev_log_term"`
 	LeaderCommit int    `json:"leader_commit"`
 	Entries      []*Log `json:"entries"`
-	//Size         int    `json:"size"` //TODO: REMOVE
 }
 
 type AppendEntryResponse struct {
@@ -275,11 +270,6 @@ func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
 		}
 	default:
 		r.Logf("client request temp unavail")
-		//return errors.New("temporarily unavailable")
-		return r.node.Reply(msg, map[string]any{
-			"code": 13,
-			"type": "error",
-			"text": "temporarily unavailable",
-		})
+		return errors.New("temporarily unavailable")
 	}
 }

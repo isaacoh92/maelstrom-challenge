@@ -296,7 +296,7 @@ func (r *Raft) AdvanceStateMachine(lock ...bool) {
 		defer r.Unlock(57)
 	}
 	for {
-		if r.lastApplied >= r.commitIndex {
+		if r.lastApplied >= r.commitIndex || !r.logs.HasIndex(r.lastApplied+1) {
 			return
 		}
 		r.lastApplied++
