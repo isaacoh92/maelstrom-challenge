@@ -364,15 +364,16 @@ func (r *Raft) maybeStepDown(term int) {
 	}
 }
 
-func (r *Raft) Commit(operation any) (any, error) {
-	r.Lock(0)
-	defer r.Unlock(0)
-	r.logs.Append(&Log{
-		Term:      r.term,
-		Operation: operation,
-	})
-	r.Logf("commit logs %s", r.logs.PrintLogs())
-
-	r.commitIndex++
-	return r.stateMachine.Apply(operation)
-}
+//
+//func (r *Raft) Commit(operation any) (any, error) {
+//	r.Lock(0)
+//	defer r.Unlock(0)
+//	r.logs.Append(&Log{
+//		Term:      r.term,
+//		Operation: operation,
+//	})
+//	r.Logf("commit logs %s", r.logs.PrintLogs())
+//
+//	r.commitIndex++
+//	return r.stateMachine.Apply(operation)
+//}
