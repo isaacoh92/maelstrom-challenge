@@ -300,6 +300,7 @@ func (r *Raft) AdvanceStateMachine(lock ...bool) {
 			return
 		}
 		r.lastApplied++
+		r.Logf("lastApplied %d; hasIndex %v; size %d", r.lastApplied, r.logs.HasIndex(r.lastApplied), r.logs.Size())
 		req := r.logs.Get(r.lastApplied).Operation
 		for _, txn := range req {
 			r.stateMachine.Apply(txn.([]any))
