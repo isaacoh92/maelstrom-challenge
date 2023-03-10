@@ -338,6 +338,9 @@ func (r *Raft) AdvanceStateMachine(lock ...bool) {
 		//for _, txn := range req {
 		//	r.stateMachine.Apply(txn.([]any))
 		//}
+		if req == nil {
+			continue
+		}
 		r.stateMachine.Apply(req)
 	}
 }
