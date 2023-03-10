@@ -253,7 +253,6 @@ func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
 			responseChannel <- m
 			return nil
 		}); err != nil {
-			r.Logf("client request RPC error")
 			return err
 		}
 		ctx, close := context.WithTimeout(context.Background(), time.Millisecond*1000)
@@ -269,7 +268,6 @@ func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
 			return errors.New("client request unsuccessful, timed out")
 		}
 	default:
-		r.Logf("client request temp unavail")
 		return errors.New("temporarily unavailable")
 	}
 }

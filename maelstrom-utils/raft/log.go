@@ -41,7 +41,6 @@ func (logs *Logs) Append(entries ...*Log) {
 }
 
 func (logs *Logs) Last() *Log {
-	//return logs.entries[logs.Size()-1]
 	return logs.Get(logs.Size())
 }
 
