@@ -159,7 +159,6 @@ func (r *Raft) SubmitVote(msg maelstrom.Message) error {
 	r.maybeStepDown(request.Term)
 
 	var grant bool
-	// TODO: should we check if we have a leader already?
 	if request.Term < r.term {
 		r.Logf("Not voting for %s because term %d is less than ours %d", request.Candidate, request.Term, r.term)
 	} else if r.votedFor != "" {
@@ -191,7 +190,6 @@ func (r *Raft) SubmitVote(msg maelstrom.Message) error {
 		Term:        r.term,
 		VoteGranted: grant,
 	}
-	//r.Unlock(6)
 
 	return r.node.Reply(msg, response)
 }
@@ -249,7 +247,6 @@ func (r *Raft) appendEntry(ctx context.Context, peer string, acks *[]string, don
 		responseChannel <- m
 		return nil
 	}); err != nil {
-		r.Logf("Append entry to peer %s errored: %v", peer, err)
 		return err
 	}
 
@@ -296,26 +293,21 @@ func (r *Raft) AdvanceStateMachine(lock ...bool) {
 		defer r.Unlock(57)
 	}
 	for {
-		if r.lastApplied >= r.commitIndex {
+		if r.lastApplied >= r.commitIndex || !r.logs.HasIndex(r.lastApplied+1) {
 			return
 		}
 		r.lastApplied++
 		req := r.logs.Get(r.lastApplied).Operation
-		//for _, txn := range req {
-		//	r.stateMachine.Apply(txn.([]any))
-		//}
-		if req != nil {
-			r.stateMachine.Apply(req)
+		for _, txn := range req {
+			r.stateMachine.Apply(txn.([]any))
 		}
-
 	}
 }
 
 func (r *Raft) ReceiveAppendEntries(msg maelstrom.Message) error {
 	var request AppendEntryRequest
 	if jsonErr := json.Unmarshal(msg.Body, &request); jsonErr != nil {
-		r.Logf("malformed append entries request %s", msg.Body)
-		return nil
+		return jsonErr
 	}
 
 	r.Lock(35)
@@ -334,7 +326,6 @@ func (r *Raft) ReceiveAppendEntries(msg maelstrom.Message) error {
 	defer r.BecomeFollower(request.Leader, request.Term)
 
 	if request.PrevLogIndex <= 0 {
-		r.Logf("append_entries request index is out of bounds")
 		return errors.New("previous log index out of bounds")
 	}
 
@@ -362,17 +353,4 @@ func (r *Raft) maybeStepDown(term int) {
 		r.Logf("Stepping down because we see a larger term %d than our term %d", term, r.term)
 		r.BecomeFollower("", term)
 	}
-}
-
-func (r *Raft) Commit(operation any) (any, error) {
-	r.Lock(0)
-	defer r.Unlock(0)
-	r.logs.Append(&Log{
-		Term:      r.term,
-		Operation: operation,
-	})
-	r.Logf("commit logs %s", r.logs.PrintLogs())
-
-	r.commitIndex++
-	return r.stateMachine.Apply(operation)
 }

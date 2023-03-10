@@ -1,6 +1,9 @@
 package raft
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -30,8 +33,35 @@ const (
 
 var epoch = time.Now().UnixMilli()
 
-type StateMachine interface {
-	Apply(any) (any, error)
+type Map struct {
+	Data map[int]int
+}
+
+func (m *Map) Apply(op any) (any, error) {
+	operation := op.([]any)
+	opType := operation[0].(string)
+	opKey, err := Int(operation[1])
+	if err != nil {
+		return []any{}, err
+	}
+
+	switch opType {
+	case "r":
+		if val, ok := m.Data[opKey]; ok {
+			return []any{"r", opKey, val}, nil
+		} else {
+			return []any{"r", opKey, 0}, nil
+		}
+	case "w":
+		val, err := Int(operation[2])
+		if err != nil {
+			return []any{}, err
+		}
+		m.Data[opKey] = val
+		return []any{"w", opKey, val}, nil
+	default:
+		return []any{}, maelstrom.NewRPCError(ERR_NOT_SUPPORTED, fmt.Sprintf("%s not supported", opType))
+	}
 }
 
 type Raft struct {
@@ -39,7 +69,7 @@ type Raft struct {
 	wait sync.WaitGroup
 
 	// components
-	stateMachine StateMachine // TODO Map might need its own lock ?
+	stateMachine Map
 	logs         *Logs
 	node         *maelstrom.Node
 
@@ -102,7 +132,6 @@ type AppendEntryRequest struct {
 	PrevLogTerm  int    `json:"prev_log_term"`
 	LeaderCommit int    `json:"leader_commit"`
 	Entries      []*Log `json:"entries"`
-	//Size         int    `json:"size"` //TODO: REMOVE
 }
 
 type AppendEntryResponse struct {
@@ -113,11 +142,10 @@ type AppendEntryResponse struct {
 	ReplicationSuccess bool   `json:"success"`
 }
 
-func InitRaft(node *maelstrom.Node, state StateMachine) *Raft {
+func InitRaft(node *maelstrom.Node) *Raft {
 	r := &Raft{
-		mux: sync.RWMutex{},
-		//stateMachine:          Map{Data: map[int]int{}},
-		stateMachine:          state,
+		mux:                   sync.RWMutex{},
+		stateMachine:          Map{Data: map[int]int{}},
 		logs:                  InitLogs(),
 		node:                  node,
 		votedFor:              "",
@@ -187,4 +215,59 @@ func Int(m any) (int, error) {
 		return res, fmt.Errorf("unsupported type %T", v)
 	}
 	return res, nil
+}
+
+func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
+	var req map[string]any
+	if err := json.Unmarshal(msg.Body, &req); err != nil {
+		return err
+	}
+
+	switch {
+	case r.IsLeader(true):
+		r.Lock(0)
+		defer r.Unlock(0)
+		r.logs.Append(&Log{
+			Term:      r.term,
+			Operation: req["txn"].([]any),
+		})
+
+		txs := []any{}
+		for _, txn := range req["txn"].([]any) {
+			res, err := r.stateMachine.Apply(txn.([]any))
+			if err != nil {
+				return err
+			}
+			txs = append(txs, res)
+		}
+		r.commitIndex++
+
+		return r.node.Reply(msg, map[string]any{
+			"type": "txn_ok",
+			"txn":  txs,
+		})
+	case r.Leader(true) != "":
+		responseChannel := make(chan maelstrom.Message)
+		// Async RPC request
+		if err := r.node.RPC(r.Leader(true), req, func(m maelstrom.Message) error {
+			responseChannel <- m
+			return nil
+		}); err != nil {
+			return err
+		}
+		ctx, close := context.WithTimeout(context.Background(), time.Millisecond*1000)
+		defer close()
+		select {
+		case res := <-responseChannel:
+			var resp map[string]any
+			if err := json.Unmarshal(res.Body, &resp); err != nil {
+				return err
+			}
+			return r.node.Reply(msg, resp)
+		case <-ctx.Done():
+			return errors.New("client request unsuccessful, timed out")
+		}
+	default:
+		return errors.New("temporarily unavailable")
+	}
 }

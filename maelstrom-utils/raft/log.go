@@ -7,15 +7,15 @@ type Logs struct {
 }
 
 type Log struct {
-	Operation any `json:"op"`
-	Term      int `json:"term"`
+	Operation []any `json:"op"`
+	Term      int   `json:"term"`
 }
 
 func InitLogs() *Logs {
 	return &Logs{
 		Entries: []*Log{
 			&Log{
-				Operation: nil,
+				Operation: []any{},
 				Term:      0,
 			},
 		},
@@ -41,7 +41,6 @@ func (logs *Logs) Append(entries ...*Log) {
 }
 
 func (logs *Logs) Last() *Log {
-	//return logs.entries[logs.Size()-1]
 	return logs.Get(logs.Size())
 }
 
