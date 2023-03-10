@@ -301,11 +301,8 @@ func (r *Raft) AdvanceStateMachine(lock ...bool) {
 		}
 		r.lastApplied++
 		req := r.logs.Get(r.lastApplied).Operation
-		//for _, txn := range req {
-		//	r.stateMachine.Apply(txn.([]any))
-		//}
-		if req != nil {
-			r.stateMachine.Apply(req)
+		for _, txn := range req {
+			r.stateMachine.Apply(txn.([]any))
 		}
 
 	}
