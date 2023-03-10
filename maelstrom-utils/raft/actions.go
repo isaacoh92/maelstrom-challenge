@@ -15,12 +15,12 @@ import (
 func (r *Raft) BecomeCandidate() {
 	r.Lock(1)
 	r.ResetElectionDeadline()
-	r.ClearVotes()
 	r.ResetVotesFlag()
-	r.ElectLeader("") // remove anyone we may have been following
+
+	r.leader = "" // remove anyone we may have been following
 	r.votedFor = r.node.ID()
-	r.AssignRole(ROLE_CANDIDATE)
-	r.CollectVote(r.node.ID())
+	r.role = ROLE_CANDIDATE
+
 	r.AdvanceTerm(r.term + 1)
 	r.Logf("Became candidate. Starting new term %d", r.term)
 	r.Unlock(1)
@@ -33,11 +33,10 @@ func (r *Raft) BecomeFollower(leader string, term int, lock ...bool) {
 		r.Lock(2)
 		defer r.Unlock(2)
 	}
-	r.ElectLeader(leader)
+	r.leader = leader
 	r.AdvanceTerm(term)
-	r.ClearVotes()
 	r.votedFor = ""
-	r.AssignRole(ROLE_FOLLOWER)
+	r.role = ROLE_FOLLOWER
 	r.ResetElectionDeadline()
 
 	r.matchIndex = nil
@@ -57,10 +56,10 @@ func (r *Raft) BecomeLeader() {
 
 	r.ResetStepDownDeadline()
 	r.ResetElectionDeadline()
-	r.ClearVotes()
-	r.ElectLeader("")
+
+	r.leader = ""
 	r.votedFor = ""
-	r.AssignRole(ROLE_LEADER)
+	r.role = ROLE_LEADER
 
 	r.nextIndex = map[string]int{}
 	r.matchIndex = map[string]int{}
@@ -143,7 +142,6 @@ func (r *Raft) RequestVote(ctx context.Context, peer string, votes *[]string, do
 
 		// peer voted for us!
 		if response.VoteGranted && r.IsCandidate() && !r.HasSufficientVotes() {
-			//r.CollectVote(peer)
 			*votes = append(*votes, peer)
 			r.ResetStepDownDeadline()
 			if r.HasMajority(votes) {
@@ -292,7 +290,7 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 
 			if response.Ack && !r.HasSufficientAcks() {
 				*acks = append(*acks, response.Source)
-				if r.HasMajorityAcks(acks) {
+				if r.HasMajority(acks) {
 					r.sufficientAcks = true
 					done <- true
 				}

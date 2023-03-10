@@ -32,45 +32,6 @@ func (r *Raft) AdvanceTerm(term int, lock ...bool) {
 	r.term = term
 }
 
-func (r *Raft) AssignRole(role int, lock ...bool) {
-	if len(lock) != 0 && lock[0] {
-		r.Lock(23)
-		defer r.Unlock(23)
-	}
-	r.role = role
-}
-
-func (r *Raft) ElectLeader(leader string, lock ...bool) {
-	if len(lock) != 0 && lock[0] {
-		r.Lock(24)
-		defer r.Unlock(24)
-	}
-	r.leader = leader
-}
-
-func (r *Raft) ClearVotes(lock ...bool) {
-	if len(lock) != 0 && lock[0] {
-		r.Lock(21)
-		defer r.Unlock(21)
-	}
-	r.votes.Clear()
-}
-
-func (r *Raft) CollectVote(node string, lock ...bool) {
-	if len(lock) != 0 && lock[0] {
-		r.Lock(21)
-		defer r.Unlock(21)
-	}
-	switch {
-	case r.IsLeader():
-		r.Logf("Already role leader, ignoring AddVote request")
-	case r.IsFollower():
-		r.Logf("Not a candidate, ignoring AddVote request")
-	case r.IsCandidate():
-		r.votes.Add(node)
-	}
-}
-
 func (r *Raft) ResetAcksFlag(lock ...bool) {
 	if len(lock) != 0 && lock[0] {
 		r.Lock(28)

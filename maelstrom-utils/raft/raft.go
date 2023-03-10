@@ -51,7 +51,6 @@ type Raft struct {
 	leader   string
 	role     int
 	term     int
-	votes    StringSet
 
 	// Tickers for ongoing processes
 	checkElectionTicker   time.Duration
@@ -128,7 +127,6 @@ func InitRaft(node *maelstrom.Node, state StateMachine) *Raft {
 		leader:                "",
 		role:                  ROLE_FOLLOWER,
 		term:                  0,
-		votes:                 StringSet{Items: map[string]bool{}},
 		checkElectionTicker:   10,
 		stepDownTicker:        100,
 		leaderHeartbeatTicker: 100,

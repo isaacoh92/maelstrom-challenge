@@ -44,15 +44,6 @@ func (r *Raft) Leader(lock ...bool) string {
 	return r.leader
 }
 
-func (r *Raft) HasMajorityVotes(lock ...bool) bool {
-	if len(lock) != 0 && lock[0] {
-		r.mux.RLock()
-		defer r.mux.RUnlock()
-	}
-	majority := r.votes.Length() >= len(r.node.NodeIDs())/2+1
-	return majority
-}
-
 func (r *Raft) HasMajorityAcks(acks *[]string, lock ...bool) bool {
 	if len(lock) != 0 && lock[0] {
 		r.mux.RLock()
