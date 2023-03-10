@@ -40,6 +40,14 @@ func (r *Raft) ResetAcksFlag(lock ...bool) {
 	r.sufficientAcks = false
 }
 
+func (r *Raft) ResetReplicationFlag(lock ...bool) {
+	if len(lock) != 0 && lock[0] {
+		r.Lock(28)
+		defer r.Unlock(28)
+	}
+	r.sufficientRepls = false
+}
+
 func (r *Raft) ResetVotesFlag(lock ...bool) {
 	if len(lock) != 0 && lock[0] {
 		r.Lock(28)

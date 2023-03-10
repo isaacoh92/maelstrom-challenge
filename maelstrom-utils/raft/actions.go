@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
-	"sort"
 	"time"
 )
 
@@ -81,7 +80,7 @@ func (r *Raft) RequestVotes() {
 		if node == r.node.ID() {
 			continue
 		}
-		go r.RequestVote(ctx, node, &votes, done)
+		go r.requestVote(ctx, node, &votes, done)
 	}
 
 	select {
@@ -95,18 +94,7 @@ func (r *Raft) RequestVotes() {
 	}
 }
 
-func (r *Raft) MaybeStepDown(term int, lock ...bool) {
-	if len(lock) != 0 && lock[0] {
-		r.Lock(30)
-		defer r.Unlock(30)
-	}
-	if r.Term() < term {
-		r.Logf("Stepping down because we see a larger term %d than our term %d", term, r.Term())
-		r.BecomeFollower("", term)
-	}
-}
-
-func (r *Raft) RequestVote(ctx context.Context, peer string, votes *[]string, done chan bool) error {
+func (r *Raft) requestVote(ctx context.Context, peer string, votes *[]string, done chan bool) error {
 	responseChannel := make(chan maelstrom.Message)
 	r.mux.RLock()
 	request := VoteRequest{
@@ -138,7 +126,7 @@ func (r *Raft) RequestVote(ctx context.Context, peer string, votes *[]string, do
 
 		r.Lock(5)
 		defer r.Unlock(5)
-		r.MaybeStepDown(response.Term)
+		r.maybeStepDown(response.Term)
 
 		// peer voted for us!
 		if response.VoteGranted && r.IsCandidate() && !r.HasSufficientVotes() {
@@ -168,7 +156,7 @@ func (r *Raft) SubmitVote(msg maelstrom.Message) error {
 	r.Logf("Received a request to vote for %s", request.Candidate)
 	r.Lock(6)
 	defer r.Unlock(6)
-	r.MaybeStepDown(request.Term)
+	r.maybeStepDown(request.Term)
 
 	var grant bool
 	// TODO: should we check if we have a leader already?
@@ -221,7 +209,7 @@ func (r *Raft) AppendEntries() {
 			continue
 		}
 		r.wait.Add(1)
-		go r.AppendEntry(ctx, node, &acks, done)
+		go r.appendEntry(ctx, node, &acks, done)
 	}
 
 	select {
@@ -234,7 +222,7 @@ func (r *Raft) AppendEntries() {
 	r.wait.Wait()
 }
 
-func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, done chan bool) error {
+func (r *Raft) appendEntry(ctx context.Context, peer string, acks *[]string, done chan bool) error {
 	defer r.wait.Done()
 	if !r.IsLeader(true) {
 		r.Logf("not going to append this entry because we're not a leader")
@@ -273,7 +261,7 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 		if jsonErr := json.Unmarshal(msg.Body, &response); jsonErr != nil {
 			return jsonErr
 		}
-		r.MaybeStepDown(response.Term)
+		r.maybeStepDown(response.Term)
 
 		if r.IsLeader() {
 			r.ResetStepDownDeadline()
@@ -282,7 +270,7 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 				r.Logf("peer %s replication succeeded, updating next and match index", peer)
 				r.nextIndex[peer] = nextIndex + entries.Size()
 				r.matchIndex[peer] = r.nextIndex[peer] - 1
-				r.AdvanceCommitIndex()
+				//r.AdvanceCommitIndex()
 			} else {
 				r.Logf("peer %s replication failed, decrementing index", peer)
 				r.nextIndex[peer]--
@@ -303,37 +291,38 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 	return nil
 }
 
-func (r *Raft) AdvanceCommitIndex(lock ...bool) {
-	if len(lock) != 0 && lock[0] {
-		r.Lock(55)
-		defer r.Unlock(55)
-	}
-	if !r.IsLeader() {
-		return
-	}
-
-	medianCommit := r.MedianCommitIndex()
-	if r.commitIndex < medianCommit && r.logs.Get(medianCommit).Term == r.term {
-		r.Logf("Advancing commit from %d to %d", r.commitIndex, medianCommit)
-		r.commitIndex = medianCommit
-	}
-}
-
-func (r *Raft) MedianCommitIndex() int {
-	matches := []int{}
-	for _, matched := range r.matchIndex {
-		matches = append(matches, matched)
-	}
-	sort.Ints(matches)
-	l := len(matches)
-	var median int
-	if l%2 == 0 {
-		median = matches[l/2-1]
-	} else {
-		median = matches[l/2]
-	}
-	return median
-}
+//
+//func (r *Raft) AdvanceCommitIndex(lock ...bool) {
+//	if len(lock) != 0 && lock[0] {
+//		r.Lock(55)
+//		defer r.Unlock(55)
+//	}
+//	if !r.IsLeader() {
+//		return
+//	}
+//
+//	medianCommit := r.MedianCommitIndex()
+//	if r.commitIndex < medianCommit && r.logs.Get(medianCommit).Term == r.term {
+//		r.Logf("Advancing commit from %d to %d", r.commitIndex, medianCommit)
+//		r.commitIndex = medianCommit
+//	}
+//}
+//
+//func (r *Raft) MedianCommitIndex() int {
+//	matches := []int{}
+//	for _, matched := range r.matchIndex {
+//		matches = append(matches, matched)
+//	}
+//	sort.Ints(matches)
+//	l := len(matches)
+//	var median int
+//	if l%2 == 0 {
+//		median = matches[l/2-1]
+//	} else {
+//		median = matches[l/2]
+//	}
+//	return median
+//}
 
 func (r *Raft) AdvanceStateMachine(lock ...bool) {
 	if len(lock) != 0 && lock[0] {
@@ -346,9 +335,10 @@ func (r *Raft) AdvanceStateMachine(lock ...bool) {
 		}
 		r.lastApplied++
 		req := r.logs.Get(r.lastApplied).Operation
-		for _, txn := range req {
-			r.stateMachine.Apply(txn.([]any))
-		}
+		//for _, txn := range req {
+		//	r.stateMachine.Apply(txn.([]any))
+		//}
+		r.stateMachine.Apply(req)
 	}
 }
 
@@ -395,4 +385,24 @@ func (r *Raft) ReceiveAppendEntries(msg maelstrom.Message) error {
 	response.ReplicationSuccess = true
 	r.Logf("responding back to append_entries request")
 	return r.node.Reply(msg, response)
+}
+
+// Must be used with a lock
+func (r *Raft) maybeStepDown(term int) {
+	if r.term < term {
+		r.Logf("Stepping down because we see a larger term %d than our term %d", term, r.term)
+		r.BecomeFollower("", term)
+	}
+}
+
+func (r *Raft) Commit(operation any) (any, error) {
+	r.Lock(0)
+	defer r.Unlock(0)
+	r.logs.Append(&Log{
+		Term:      r.term,
+		Operation: operation,
+	})
+
+	r.commitIndex++
+	return r.stateMachine.Apply(operation)
 }

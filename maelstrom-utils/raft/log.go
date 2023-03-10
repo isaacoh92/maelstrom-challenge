@@ -7,15 +7,15 @@ type Logs struct {
 }
 
 type Log struct {
-	Operation []any `json:"ops"`
-	Term      int   `json:"term"`
+	Operation any `json:"op"`
+	Term      int `json:"term"`
 }
 
 func InitLogs() *Logs {
 	return &Logs{
 		Entries: []*Log{
 			&Log{
-				Operation: []any{},
+				Operation: nil,
 				Term:      0,
 			},
 		},
