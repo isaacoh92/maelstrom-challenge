@@ -1,5 +1,7 @@
 package main
 
+import "encoding/json"
+
 type Logs struct {
 	//node    *maelstrom.Node
 	Entries []*Log `json:"entries"`
@@ -26,7 +28,12 @@ func (logs *Logs) Get(index int) *Log {
 	return logs.Entries[index-1]
 }
 
+func (logs *Logs) HasIndex(index int) bool {
+	return index <= logs.Size()
+}
+
 func (logs *Logs) FromIndex(index int) *Logs {
+
 	return &Logs{logs.Entries[index-1:]}
 }
 
@@ -50,4 +57,14 @@ func (logs *Logs) Size() int {
 // Truncate the entries up to the specified index
 func (logs *Logs) Truncate(index int) {
 	logs.Entries = logs.Entries[:index] // up to :index because our entries are 1-indexed
+}
+
+func (logs *Logs) PrintLogs() string {
+	//ret := [][]int{}
+	//for i, entry := range logs.Entries {
+	//	ret = append(ret, []int{i, entry.Term})
+	//}
+	//return ret
+	r, _ := json.Marshal(logs.Entries)
+	return string(r)
 }

@@ -65,12 +65,13 @@ func (m *Map) Apply(operation []any) ([]any, error) {
 
 // structs
 type Raft struct {
-	mux sync.RWMutex
+	mux  sync.RWMutex
+	wait sync.WaitGroup
 
 	// components
-	state Map // TODO Map might need its own lock ?
-	logs  *Logs
-	node  *maelstrom.Node
+	stateMachine Map // TODO Map might need its own lock ?
+	logs         *Logs
+	node         *maelstrom.Node
 
 	// Persistent state
 	votedFor string
@@ -131,6 +132,7 @@ type AppendEntryRequest struct {
 	PrevLogTerm  int    `json:"prev_log_term"`
 	LeaderCommit int    `json:"leader_commit"`
 	Entries      []*Log `json:"entries"`
+	Size         int    `json:"size"` //TODO: REMOVE
 }
 
 type AppendEntryResponse struct {
@@ -141,49 +143,10 @@ type AppendEntryResponse struct {
 	ReplicationSuccess bool   `json:"success"`
 }
 
-/*
-Request:
-Received {c4 n0 {"txn":[["r",9,null],["r",8,null],["w",9,1]],"type":"txn","msg_id":1}}
-
-Response:
-Sent {"src":"n0","dest":"c7","body":{"in_reply_to":1,"txn":[["w",9,3]],"type":"txn_ok"}}
-*/
-func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
-	var req map[string]any
-	if err := json.Unmarshal(msg.Body, &req); err != nil {
-		return err
-	}
-	r.Lock(0)
-	defer r.Unlock(0)
-
-	if !r.IsLeader() {
-		return errors.New("temporarily unavailable")
-	}
-
-	r.logs.Append(&Log{
-		Term:      r.term,
-		Operation: req["txn"].([]any),
-	})
-
-	txs := []any{}
-	for _, txn := range req["txn"].([]any) {
-		res, err := r.state.Apply(txn.([]any))
-		if err != nil {
-			return err
-		}
-		txs = append(txs, res)
-	}
-
-	return r.node.Reply(msg, map[string]any{
-		"type": "txn_ok",
-		"txn":  txs,
-	})
-}
-
 func InitRaft(node *maelstrom.Node) *Raft {
 	r := &Raft{
 		mux:                   sync.RWMutex{},
-		state:                 Map{Data: map[int]int{}},
+		stateMachine:          Map{Data: map[int]int{}},
 		logs:                  InitLogs(),
 		node:                  node,
 		votedFor:              "",
@@ -193,7 +156,7 @@ func InitRaft(node *maelstrom.Node) *Raft {
 		votes:                 StringSet{Items: map[string]bool{}},
 		checkElectionTicker:   10,
 		stepDownTicker:        100,
-		leaderHeartbeatTicker: 500,
+		leaderHeartbeatTicker: 100,
 		replicationTicker:     0,
 		stepDownTimeout:       2000,
 		electionDeadline:      time.Now().Add(generateRandomTimeout(150, 300)),
@@ -285,6 +248,7 @@ func (r *Raft) BecomeLeader() {
 	r.ResetStepDownDeadline()
 	r.ResetElectionDeadline()
 	r.ClearVotes()
+	r.ElectLeader("")
 	r.votedFor = ""
 	r.AssignRole(ROLE_LEADER)
 
@@ -454,6 +418,7 @@ func (r *Raft) AppendEntries() {
 		if node == r.node.ID() {
 			continue
 		}
+		r.wait.Add(1)
 		go r.AppendEntry(ctx, node, &acks, done)
 	}
 
@@ -464,9 +429,11 @@ func (r *Raft) AppendEntries() {
 	case <-ctx.Done():
 		r.Logf("Didn't receive acks from followers in time... stepping down")
 	}
+	r.wait.Wait()
 }
 
 func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, done chan bool) error {
+	defer r.wait.Done()
 	if !r.IsLeader(true) {
 		r.Logf("not going to append this entry because we're not a leader")
 		return nil
@@ -475,24 +442,12 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 	r.mux.RLock()
 	nextIndex := r.nextIndex[peer]
 	entries := r.logs.FromIndex(nextIndex)
-	//if entries.Size() > 0 {
-	//	go r.ReplicateLog(peer)
-	//}
+	r.Logf("append_entry debug next index for peer %s is %d", peer, nextIndex)
+	r.Logf("append_entry debug total logs: %d %s", r.logs.Size(), r.logs.PrintLogs())
+	r.Logf("append_entry debug entries: %d %s", entries.Size(), entries.PrintLogs())
 
 	responseChannel := make(chan maelstrom.Message)
-	//request := map[string]any{
-	//	"type": "append_entries",
-	//	"term": r.Term(),
-	//	"src":  r.node.ID(),
-	//
-	//	//"leader_id": r.node.ID(),
-	//	"prev_log_index": nextIndex - 1,
-	//	"prev_log_term":  r.logs.Get(nextIndex - 1).Term,
-	//	"leader_commit":  r.commitIndex,
-	//}
-	//if entries.Size() > 0 {
-	//	request["entries"] = entries.Entries
-	//}
+
 	request := AppendEntryRequest{
 		Type:         "append_entries",
 		Term:         r.term,
@@ -501,6 +456,8 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 		PrevLogTerm:  r.logs.Get(nextIndex - 1).Term,
 		LeaderCommit: r.commitIndex,
 		Entries:      entries.Entries,
+
+		Size: r.logs.Size(),
 	}
 	r.mux.RUnlock()
 	// Async RPC request
@@ -527,9 +484,11 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 			r.ResetStepDownDeadline()
 
 			if response.ReplicationSuccess {
+				r.Logf("peer %s replication succeeded, updating next and match index", peer)
 				r.nextIndex[peer] = nextIndex + entries.Size()
 				r.matchIndex[peer] = r.nextIndex[peer] - 1
 			} else {
+				r.Logf("peer %s replication failed, decrementing index", peer)
 				r.nextIndex[peer]--
 			}
 
@@ -562,22 +521,57 @@ func (r *Raft) ReceiveAppendEntries(msg maelstrom.Message) error {
 		r.Logf("malformed append entries request %s", msg.Body)
 		return nil
 	}
-	var ack bool
 
 	r.Lock(35)
-	if request.Term >= r.term {
-		r.Logf("append_entries request term %d >= our current term %d", request.Term, r.term)
-		r.BecomeFollower(request.Leader, request.Term)
-		ack = true
+	defer r.Unlock(35)
+	response := AppendEntryResponse{
+		Type: "append_entries_response",
+		Term: r.term,
+	}
+	if request.Term < r.term {
+		r.Logf("append_entries request deny ACK -- term is less than ours %d", r.term)
+		return r.node.Reply(msg, response)
 	}
 
-	response := AppendEntryResponse{
-		Type:               "append_entries_response",
-		Term:               r.term,
-		Ack:                ack,
-		ReplicationSuccess: true,
+	r.ResetElectionDeadline()
+	response.Ack = true
+	defer r.BecomeFollower(request.Leader, request.Term)
+
+	if request.PrevLogIndex <= 0 {
+		r.Logf("append_entries request index is out of bounds")
+		return errors.New("previous log index out of bounds")
 	}
-	r.Unlock(35)
+
+	// Invalid if we don't have the prev log index, or if we do and the terms do not match
+	if !r.logs.HasIndex(request.PrevLogIndex) || r.logs.Get(request.PrevLogIndex).Term != request.PrevLogTerm {
+		r.Logf("append_entries request term/index mismatch")
+		return r.node.Reply(msg, response)
+	}
+
+	r.Logf("before truncating %d %s", r.logs.Size(), r.logs.PrintLogs())
+	r.logs.Truncate(request.PrevLogIndex)
+	r.Logf("truncating our logs %d %s", r.logs.Size(), r.logs.PrintLogs())
+	r.logs.Append(request.Entries...)
+	r.Logf("after truncating and appending %d %s", r.logs.Size(), r.logs.PrintLogs())
+
+	r.Logf("truncating final logs size %d; leader log size: %d", r.logs.Size(), request.Size)
+	if r.commitIndex < request.LeaderCommit {
+		r.commitIndex = Min(r.logs.Size(), request.LeaderCommit)
+	}
+
+	response.ReplicationSuccess = true
+	//if request.Term >= r.term {
+	//	r.Logf("append_entries request term %d >= our current term %d", request.Term, r.term)
+	//	r.BecomeFollower(request.Leader, request.Term)
+	//	ack = true
+	//}
+	//
+	//resp := AppendEntryResponse{
+	//	Type:               "append_entries_response",
+	//	Term:               r.term,
+	//	Ack:                ack,
+	//	ReplicationSuccess: true,
+	//}
 
 	// jsonResponse, jsonErr := json.Marshal(response)
 	// if jsonErr != nil {
@@ -628,7 +622,18 @@ func (r *Raft) ScheduleStepDownAsLeader() {
 func (r *Raft) PrintLeader() {
 	for range time.Tick(time.Millisecond * 1000) {
 		r.mux.RLock()
-		r.Logf("My leader is %s", r.leader)
+		leader := r.leader
+		if r.IsLeader() {
+			leader = r.node.ID()
+		}
+		r.Logf("My leader for term %d is %s", r.term, leader)
 		r.mux.RUnlock()
 	}
+}
+
+func Min(a, b int) int {
+	if a <= b {
+		return a
+	}
+	return b
 }

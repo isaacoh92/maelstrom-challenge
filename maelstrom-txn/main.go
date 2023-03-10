@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -86,7 +88,7 @@ func main() {
 
 	n.Handle("txn", func(msg maelstrom.Message) error {
 		setup(n)
-		return raft.HandleClientRequest(msg)
+		return HandleClientRequest(msg, raft)
 	})
 
 	n.Handle("request_vote", func(msg maelstrom.Message) error {
@@ -143,4 +145,91 @@ func broadcastDatabase(node *maelstrom.Node) {
 		}
 		kv.mux.Unlock()
 	}
+}
+
+/*
+Request:
+Received {c4 n0 {"txn":[["r",9,null],["r",8,null],["w",9,1]],"type":"txn","msg_id":1}}
+
+Response:
+Sent {"src":"n0","dest":"c7","body":{"in_reply_to":1,"txn":[["w",9,3]],"type":"txn_ok"}}
+*/
+func HandleClientRequest(msg maelstrom.Message, r *Raft) error {
+	var req map[string]any
+	if err := json.Unmarshal(msg.Body, &req); err != nil {
+		return err
+	}
+	//r.Lock(0)
+	//defer r.Unlock(0)
+
+	switch {
+	case r.IsLeader(true):
+		r.Lock(0)
+		defer r.Unlock(0)
+		r.logs.Append(&Log{
+			Term:      r.term,
+			Operation: req["txn"].([]any),
+		})
+
+		txs := []any{}
+		for _, txn := range req["txn"].([]any) {
+			res, err := r.stateMachine.Apply(txn.([]any))
+			if err != nil {
+				return err
+			}
+			txs = append(txs, res)
+		}
+
+		return r.node.Reply(msg, map[string]any{
+			"type": "txn_ok",
+			"txn":  txs,
+		})
+	case r.Leader(true) != "":
+		responseChannel := make(chan maelstrom.Message)
+		// Async RPC request
+		if err := r.node.RPC(r.Leader(true), req, func(m maelstrom.Message) error {
+			responseChannel <- m
+			return nil
+		}); err != nil {
+			r.Logf("client request RPC error")
+			return err
+		}
+		ctx, close := context.WithTimeout(context.Background(), time.Millisecond*1000)
+		defer close()
+		select {
+		case res := <-responseChannel:
+			var resp map[string]any
+			if err := json.Unmarshal(res.Body, &resp); err != nil {
+				return err
+			}
+			return r.node.Reply(msg, resp)
+		case <-ctx.Done():
+			return errors.New("client request unsuccessful, timed out")
+		}
+	default:
+		r.Logf("client request temp unavail")
+		return errors.New("temporarily unavailable")
+	}
+	//if !r.IsLeader() {
+	//	return errors.New("temporarily unavailable")
+	//}
+
+	//r.logs.Append(&Log{
+	//	Term:      r.term,
+	//	Operation: req["txn"].([]any),
+	//})
+	//
+	//txs := []any{}
+	//for _, txn := range req["txn"].([]any) {
+	//	res, err := r.state.Apply(txn.([]any))
+	//	if err != nil {
+	//		return err
+	//	}
+	//	txs = append(txs, res)
+	//}
+	//
+	//return r.node.Reply(msg, map[string]any{
+	//	"type": "txn_ok",
+	//	"txn":  txs,
+	//})
 }
