@@ -9,18 +9,80 @@ import (
 	"time"
 )
 
-// Main raft actions (e.g. Request/Submit votes, append entries, etc.)
+// Main raft actions (e.g. Role changes, Request/Submit votes, append entries, etc.)
+
+// BecomeCandidate - When a node becomes a candidate, a new election term is started and the node votes for itself
+func (r *Raft) BecomeCandidate() {
+	r.Lock(1)
+	r.ResetElectionDeadline()
+	r.ClearVotes()
+	r.ResetVotesFlag()
+	r.ElectLeader("") // remove anyone we may have been following
+	r.votedFor = r.node.ID()
+	r.AssignRole(ROLE_CANDIDATE)
+	r.CollectVote(r.node.ID())
+	r.AdvanceTerm(r.term + 1)
+	r.Logf("Became candidate. Starting new term %d", r.term)
+	r.Unlock(1)
+
+	r.RequestVotes()
+}
+
+func (r *Raft) BecomeFollower(leader string, term int, lock ...bool) {
+	if len(lock) != 0 && lock[0] {
+		r.Lock(2)
+		defer r.Unlock(2)
+	}
+	r.ElectLeader(leader)
+	r.AdvanceTerm(term)
+	r.ClearVotes()
+	r.votedFor = ""
+	r.AssignRole(ROLE_FOLLOWER)
+	r.ResetElectionDeadline()
+
+	r.matchIndex = nil
+	r.nextIndex = nil
+
+	r.Logf("became follower to %s for term %d", leader, r.term)
+}
+
+func (r *Raft) BecomeLeader() {
+	r.Lock(3)
+	defer r.Unlock(3)
+
+	if !r.IsCandidate() {
+		r.Logf("Need to be a candidate to become a leader")
+		return
+	}
+
+	r.ResetStepDownDeadline()
+	r.ResetElectionDeadline()
+	r.ClearVotes()
+	r.ElectLeader("")
+	r.votedFor = ""
+	r.AssignRole(ROLE_LEADER)
+
+	r.nextIndex = map[string]int{}
+	r.matchIndex = map[string]int{}
+	for _, peer := range r.node.NodeIDs() {
+		r.nextIndex[peer] = r.logs.Size() + 1
+		r.matchIndex[peer] = 0
+	}
+
+	r.Logf("became leader on term %d", r.term)
+}
+
 // Request votes by making RPC calls to other nodes
 func (r *Raft) RequestVotes() {
 	done := make(chan bool)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*1000)
 	defer cancel()
-
+	votes := []string{r.node.ID()}
 	for _, node := range r.node.NodeIDs() {
 		if node == r.node.ID() {
 			continue
 		}
-		go r.RequestVote(ctx, node, done)
+		go r.RequestVote(ctx, node, &votes, done)
 	}
 
 	select {
@@ -45,7 +107,7 @@ func (r *Raft) MaybeStepDown(term int, lock ...bool) {
 	}
 }
 
-func (r *Raft) RequestVote(ctx context.Context, peer string, done chan bool) error {
+func (r *Raft) RequestVote(ctx context.Context, peer string, votes *[]string, done chan bool) error {
 	responseChannel := make(chan maelstrom.Message)
 	r.mux.RLock()
 	request := VoteRequest{
@@ -81,9 +143,10 @@ func (r *Raft) RequestVote(ctx context.Context, peer string, done chan bool) err
 
 		// peer voted for us!
 		if response.VoteGranted && r.IsCandidate() && !r.HasSufficientVotes() {
-			r.CollectVote(peer)
+			//r.CollectVote(peer)
+			*votes = append(*votes, peer)
 			r.ResetStepDownDeadline()
-			if r.HasMajorityVotes() {
+			if r.HasMajority(votes) {
 				r.Logf("Has majority votes")
 				r.sufficientVotes = true
 				done <- true
@@ -181,7 +244,6 @@ func (r *Raft) AppendEntry(ctx context.Context, peer string, acks *[]string, don
 	}
 
 	r.mux.RLock()
-	r.Logf("current leader state machine %v", r.stateMachine.Data)
 	nextIndex := r.nextIndex[peer]
 	entries := r.logs.FromIndex(nextIndex)
 
@@ -332,7 +394,6 @@ func (r *Raft) ReceiveAppendEntries(msg maelstrom.Message) error {
 		r.commitIndex = min(r.logs.Size(), request.LeaderCommit)
 	}
 	r.AdvanceStateMachine()
-	r.Logf("current state %v", r.stateMachine.Data)
 	response.ReplicationSuccess = true
 	r.Logf("responding back to append_entries request")
 	return r.node.Reply(msg, response)

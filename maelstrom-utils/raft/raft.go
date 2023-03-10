@@ -31,44 +31,12 @@ const (
 	ROLE_LEADER    = 2
 )
 
-//type Map struct {
-//	Data map[int]int
-//}
-
 var epoch = time.Now().UnixMilli()
-
-//func (m *Map) Apply(op any) (any, error) {
-//	operation := op.([]any)
-//	opType := operation[0].(string)
-//	opKey, err := Int(operation[1])
-//	if err != nil {
-//		return []any{}, err
-//	}
-//
-//	switch opType {
-//	case "r":
-//		if val, ok := m.Data[opKey]; ok {
-//			return []any{"r", opKey, val}, nil
-//		} else {
-//			return []any{"r", opKey, 0}, nil
-//		}
-//	case "w":
-//		val, err := Int(operation[2])
-//		if err != nil {
-//			return []any{}, err
-//		}
-//		m.Data[opKey] = val
-//		return []any{"w", opKey, val}, nil
-//	default:
-//		return []any{}, maelstrom.NewRPCError(ERR_NOT_SUPPORTED, fmt.Sprintf("%s not supported", opType))
-//	}
-//}
 
 type StateMachine interface {
 	Apply(any) (any, error)
 }
 
-// structs
 type Raft struct {
 	mux  sync.RWMutex
 	wait sync.WaitGroup
@@ -104,7 +72,7 @@ type Raft struct {
 	//////////////////////
 	// index of highest log entry known to be committed (initialized to 0)
 	commitIndex int
-	// index of highest log entry applied to state machine -- Do we need this? Since our state machine is just a local map
+	// index of the highest log entry applied to state machine -- Do we need this? Since our state machine is just a local map
 	lastApplied int
 	// Map of nodes to the next index to replicate (initialized to leader last log index + 1)
 	nextIndex map[string]int
@@ -113,6 +81,7 @@ type Raft struct {
 
 	sufficientAcks  bool
 	sufficientVotes bool
+	sufficientRepls bool
 }
 
 type VoteRequest struct {
@@ -210,8 +179,6 @@ func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return err
 	}
-	//r.Lock(0)
-	//defer r.Unlock(0)
 
 	switch {
 	case r.IsLeader(true):
@@ -268,65 +235,18 @@ func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
 	}
 }
 
-// When a node becomes a candidate, a new election term is started and the node votes for itself
-func (r *Raft) BecomeCandidate() {
-	r.Lock(1)
-	r.ResetElectionDeadline()
-	r.ClearVotes()
-	r.ResetVotesFlag()
-	r.ElectLeader("") // remove anyone we may have been following
-	r.votedFor = r.node.ID()
-	r.AssignRole(ROLE_CANDIDATE)
-	r.CollectVote(r.node.ID())
-	r.AdvanceTerm(r.term + 1)
-	r.Logf("Became candidate. Starting new term %d", r.term)
-	r.Unlock(1)
+//func (r *Raft) broadcastLogs() {
+//	for _, peer := range r.node.NodeIDs() {
+//
+//	}
+//}
 
-	r.RequestVotes()
+func (r *Raft) broadcastLog() {
+
 }
 
-func (r *Raft) BecomeFollower(leader string, term int, lock ...bool) {
-	if len(lock) != 0 && lock[0] {
-		r.Lock(2)
-		defer r.Unlock(2)
-	}
-	r.ElectLeader(leader)
-	r.AdvanceTerm(term)
-	r.ClearVotes()
-	r.votedFor = ""
-	r.AssignRole(ROLE_FOLLOWER)
-	r.ResetElectionDeadline()
+func (r *Raft) broadcastCommit() {
 
-	r.matchIndex = nil
-	r.nextIndex = nil
-
-	r.Logf("became follower to %s for term %d", leader, r.term)
-}
-
-func (r *Raft) BecomeLeader() {
-	r.Lock(3)
-	defer r.Unlock(3)
-
-	if !r.IsCandidate() {
-		r.Logf("Need to be a candidate to become a leader")
-		return
-	}
-
-	r.ResetStepDownDeadline()
-	r.ResetElectionDeadline()
-	r.ClearVotes()
-	r.ElectLeader("")
-	r.votedFor = ""
-	r.AssignRole(ROLE_LEADER)
-
-	r.nextIndex = map[string]int{}
-	r.matchIndex = map[string]int{}
-	for _, peer := range r.node.NodeIDs() {
-		r.nextIndex[peer] = r.logs.Size() + 1
-		r.matchIndex[peer] = 0
-	}
-
-	r.Logf("became leader on term %d", r.term)
 }
 
 func min(a, b int) int {

@@ -64,6 +64,15 @@ func (r *Raft) HasMajorityAcks(acks *[]string, lock ...bool) bool {
 	return majority
 }
 
+func (r *Raft) HasMajority(a *[]string, lock ...bool) bool {
+	if len(lock) != 0 && lock[0] {
+		r.mux.RLock()
+		defer r.mux.RUnlock()
+	}
+	majority := len(*a) >= len(r.node.NodeIDs())/2+1
+	return majority
+}
+
 func (r *Raft) HasSufficientAcks(lock ...bool) bool {
 	if len(lock) != 0 && lock[0] {
 		r.mux.RLock()
