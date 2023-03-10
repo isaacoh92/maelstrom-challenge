@@ -33,16 +33,47 @@ const (
 
 var epoch = time.Now().UnixMilli()
 
-type StateMachine interface {
-	Apply(any) (any, error)
+type Map struct {
+	Data map[int]int
 }
+
+func (m *Map) Apply(op any) (any, error) {
+	operation := op.([]any)
+	opType := operation[0].(string)
+	opKey, err := Int(operation[1])
+	if err != nil {
+		return []any{}, err
+	}
+
+	switch opType {
+	case "r":
+		if val, ok := m.Data[opKey]; ok {
+			return []any{"r", opKey, val}, nil
+		} else {
+			return []any{"r", opKey, 0}, nil
+		}
+	case "w":
+		val, err := Int(operation[2])
+		if err != nil {
+			return []any{}, err
+		}
+		m.Data[opKey] = val
+		return []any{"w", opKey, val}, nil
+	default:
+		return []any{}, maelstrom.NewRPCError(ERR_NOT_SUPPORTED, fmt.Sprintf("%s not supported", opType))
+	}
+}
+
+//type StateMachine interface {
+//	Apply(any) (any, error)
+//}
 
 type Raft struct {
 	mux  sync.RWMutex
 	wait sync.WaitGroup
 
 	// components
-	stateMachine StateMachine // TODO Map might need its own lock ?
+	stateMachine Map // TODO Map might need its own lock ?
 	logs         *Logs
 	node         *maelstrom.Node
 
@@ -116,11 +147,10 @@ type AppendEntryResponse struct {
 	ReplicationSuccess bool   `json:"success"`
 }
 
-func InitRaft(node *maelstrom.Node, state StateMachine) *Raft {
+func InitRaft(node *maelstrom.Node) *Raft {
 	r := &Raft{
-		mux: sync.RWMutex{},
-		//stateMachine:          Map{Data: map[int]int{}},
-		stateMachine:          state,
+		mux:                   sync.RWMutex{},
+		stateMachine:          Map{Data: map[int]int{}},
 		logs:                  InitLogs(),
 		node:                  node,
 		votedFor:              "",
