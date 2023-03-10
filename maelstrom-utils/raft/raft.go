@@ -1,6 +1,9 @@
 package raft
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -187,4 +190,65 @@ func Int(m any) (int, error) {
 		return res, fmt.Errorf("unsupported type %T", v)
 	}
 	return res, nil
+}
+
+func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
+	var req map[string]any
+	if err := json.Unmarshal(msg.Body, &req); err != nil {
+		return err
+	}
+
+	switch {
+	case r.IsLeader(true):
+		r.Lock(0)
+		defer r.Unlock(0)
+		r.logs.Append(&Log{
+			Term:      r.term,
+			Operation: req["txn"].([]any),
+		})
+
+		txs := []any{}
+		for _, txn := range req["txn"].([]any) {
+			res, err := r.stateMachine.Apply(txn.([]any))
+			if err != nil {
+				return err
+			}
+			txs = append(txs, res)
+		}
+
+		return r.node.Reply(msg, map[string]any{
+			"type": "txn_ok",
+			"txn":  txs,
+		})
+	case r.Leader(true) != "":
+		responseChannel := make(chan maelstrom.Message)
+		// Async RPC request
+		if err := r.node.RPC(r.Leader(true), req, func(m maelstrom.Message) error {
+			responseChannel <- m
+			return nil
+		}); err != nil {
+			r.Logf("client request RPC error")
+			return err
+		}
+		ctx, close := context.WithTimeout(context.Background(), time.Millisecond*1000)
+		defer close()
+		select {
+		case res := <-responseChannel:
+			var resp map[string]any
+			if err := json.Unmarshal(res.Body, &resp); err != nil {
+				return err
+			}
+			return r.node.Reply(msg, resp)
+		case <-ctx.Done():
+			return errors.New("client request unsuccessful, timed out")
+		}
+	default:
+		r.Logf("client request temp unavail")
+		//return errors.New("temporarily unavailable")
+		return r.node.Reply(msg, map[string]any{
+			"code": 13,
+			"type": "error",
+			"text": "temporarily unavailable",
+		})
+	}
 }
