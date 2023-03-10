@@ -215,6 +215,7 @@ func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
 			}
 			txs = append(txs, res)
 		}
+		r.commitIndex++
 
 		return r.node.Reply(msg, map[string]any{
 			"type": "txn_ok",
