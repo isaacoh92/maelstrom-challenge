@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// Implemented a totally available Key value store with a Read-committed consistency model
+// Also implemented a store with strict-serializable consistency (which cannot achieve total availability)
+// Consistency model can be changed in main()
+
 var (
 	kv   *KV
 	top  map[string][]string

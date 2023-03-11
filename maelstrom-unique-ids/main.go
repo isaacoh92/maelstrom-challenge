@@ -12,6 +12,12 @@ import (
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
+// A simpler implementation of Twitter's Snowflake ID generator
+// ID generated is simply a binary representation (as a string)
+// Could have been done using just a sequence number and node name
+// (such as the one implemented in maelstrom-counter/id_gen.go),
+// but Snowflake is beautifully crafted :)
+
 var epoch int64 = time.Now().UnixMilli()
 var lastSeen int64 = time.Now().UnixMilli()
 var sequence = 0
