@@ -125,8 +125,8 @@ func GenerateTopology(nodes []string, level int) (map[string][]string, error) {
 
 	top := map[string][]string{}
 
-	for _, nodeId := range nodes {
-		top[nodeId] = []string{}
+	for _, nodeID := range nodes {
+		top[nodeID] = []string{}
 	}
 
 	pq := InitPQ(nodes, level)
