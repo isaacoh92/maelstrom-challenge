@@ -22,6 +22,12 @@ github.com/isaacoh92/maelstrom-challenge/maelstrom-utils v0.0.0-20230311053334-1
 github.com/isaacoh92/maelstrom-challenge/maelstrom-utils v0.0.0-20230311053334-12d631d3d5a0/go.mod h1:pqO4zdF6LXE2clQTSHjU2Ny7/9JtFazN+AB50z9xm8c=
 github.com/isaacoh92/maelstrom-challenge/maelstrom-utils v0.0.0-20230311054542-9241e3066b72 h1:na8A7MPICPPcjnBiy7VrKuohewbJYl8kWquGiO5Ig0w=
 github.com/isaacoh92/maelstrom-challenge/maelstrom-utils v0.0.0-20230311054542-9241e3066b72/go.mod h1:pqO4zdF6LXE2clQTSHjU2Ny7/9JtFazN+AB50z9xm8c=
+github.com/isaacoh92/maelstrom-challenge/maelstrom-utils v0.0.0-20230311060250-8c0b1df78d06 h1:AN5vYnaqh55WtiJN5UJyU+I0nWPcNTbRC6iclszFW1o=
+github.com/isaacoh92/maelstrom-challenge/maelstrom-utils v0.0.0-20230311060250-8c0b1df78d06/go.mod h1:pqO4zdF6LXE2clQTSHjU2Ny7/9JtFazN+AB50z9xm8c=
+github.com/isaacoh92/maelstrom-challenge/maelstrom-utils v0.0.0-20230311060420-5e82e560d310 h1:KM6Cj/MkmWE7/hc9JujOta9TpXnJEsvjKwlCjC6z3dA=
+github.com/isaacoh92/maelstrom-challenge/maelstrom-utils v0.0.0-20230311060420-5e82e560d310/go.mod h1:pqO4zdF6LXE2clQTSHjU2Ny7/9JtFazN+AB50z9xm8c=
+github.com/isaacoh92/maelstrom-challenge/maelstrom-utils v0.0.0-20230311060727-70cdee3922d5 h1:oGVH0hjvWKg6IhAX6d0tASWlCEgcN3yqCr9hciWCinw=
+github.com/isaacoh92/maelstrom-challenge/maelstrom-utils v0.0.0-20230311060727-70cdee3922d5/go.mod h1:pqO4zdF6LXE2clQTSHjU2Ny7/9JtFazN+AB50z9xm8c=
 github.com/jepsen-io/maelstrom/demo/go v0.0.0-20230228144258-93f15782f204 h1:MxoD0ZiUM8roAesy3vD5SvYxt2sY7FJQquoXWAfvAmY=
 github.com/jepsen-io/maelstrom/demo/go v0.0.0-20230228144258-93f15782f204/go.mod h1:i6aVIs5AIOOaQF1lAisBm7DDeWM1Iopf+26UxjagsCU=
 golang.org/x/exp v0.0.0-20230224173230-c95f2b4c22f2 h1:Jvc7gsqn21cJHCmAWx0LiimpP18LZmUxkT5Mp7EZ1mI=
