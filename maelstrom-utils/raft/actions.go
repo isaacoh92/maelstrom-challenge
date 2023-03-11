@@ -70,7 +70,7 @@ func (r *Raft) BecomeLeader() {
 	r.Logf("became leader on term %d", r.term)
 }
 
-// Request votes by making RPC calls to other nodes
+// RequestVotes requests votes via RPC calls to other nodes
 func (r *Raft) RequestVotes() {
 	done := make(chan bool)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*1000)
@@ -144,7 +144,7 @@ func (r *Raft) requestVote(ctx context.Context, peer string, votes *[]string, do
 	}
 }
 
-// If this node hasn't voted yet in this term, then it votes for the candidate
+// SubmitVote If this node hasn't voted yet in this term, then it votes for the candidate
 // After voting, resets election timeout
 func (r *Raft) SubmitVote(msg maelstrom.Message) error {
 	var request VoteRequest
