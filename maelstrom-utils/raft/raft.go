@@ -54,17 +54,13 @@ func (m *Map) Apply(operation []any) ([]any, error) {
 	}
 }
 
+// Raft
+// nolint:all ignore field alignment for this struct to group fields logically
 type Raft struct {
 	// components
-	stateMachine Map
+	stateMachine *Map
 	logs         *Logs
 	node         *maelstrom.Node
-
-	// Persistent state
-	votedFor string
-	leader   string
-	role     int
-	term     int
 
 	// Tickers for ongoing processes
 	checkElectionTicker   time.Duration
@@ -79,6 +75,12 @@ type Raft struct {
 	electionDeadline time.Time
 	stepDownDeadline time.Time
 	lastReplication  time.Time
+
+	// Persistent state
+	votedFor string
+	leader   string
+	role     int
+	term     int
 
 	//////////////////////
 	//// Leader State ////
@@ -135,7 +137,7 @@ type AppendEntryResponse struct {
 func InitRaft(node *maelstrom.Node) *Raft {
 	r := &Raft{
 		mux:                   sync.RWMutex{},
-		stateMachine:          Map{Data: map[int]int{}},
+		stateMachine:          &Map{Data: map[int]int{}},
 		logs:                  InitLogs(),
 		node:                  node,
 		votedFor:              "",
