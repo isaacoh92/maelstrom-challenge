@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	rft "github.com/isaacoh92/maelstrom-challenge/maelstrom-utils/raft"
 	"github.com/isaacoh92/maelstrom-challenge/maelstrom-utils/topology"
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
@@ -42,19 +43,18 @@ func ReadCommitted() {
 		if err != nil {
 			return err
 		}
-		n.Reply(msg, map[string]any{
+		return n.Reply(msg, map[string]any{
 			"type": "txn_ok",
 			"txn":  result,
 		})
-		return nil
 	})
 
 	n.Handle("sync", func(msg maelstrom.Message) error {
 		setup(n)
 		type request struct {
-			Type       string        `json:"type"`
-			Database   map[int]int   `json:"database"`
 			Timestamps map[int]int64 `json:"timestamps"`
+			Database   map[int]int   `json:"database"`
+			Type       string        `json:"type"`
 		}
 
 		var body request
@@ -127,11 +127,13 @@ func broadcastDatabase(node *maelstrom.Node) {
 		kv.mux.Lock()
 		if kv.changed {
 			for _, n := range top[node.ID()] {
-				node.Send(n, map[string]any{
+				if err := node.Send(n, map[string]any{
 					"type":       "sync",
 					"database":   kv.database,
 					"timestamps": kv.timestamp,
-				})
+				}); err != nil {
+					fmt.Printf("broadcast to peer %s failed with: %v", n, err)
+				}
 			}
 			kv.changed = false
 		}

@@ -8,7 +8,7 @@ import (
 )
 
 type KV struct {
-	mux       sync.RWMutex
+	mux       *sync.RWMutex
 	database  map[int]int
 	timestamp map[int]int64
 	epoch     int64
@@ -17,7 +17,7 @@ type KV struct {
 
 func InitKV() *KV {
 	return &KV{
-		mux:       sync.RWMutex{},
+		mux:       &sync.RWMutex{},
 		database:  map[int]int{},
 		timestamp: map[int]int64{},
 		epoch:     time.Now().UnixMilli(),
@@ -65,7 +65,10 @@ func (kv *KV) Transact(transactions [][]any) ([][]any, error) {
 	defer kv.mux.Unlock()
 
 	for _, transaction := range transactions {
-		opType := transaction[0].(string)
+		opType, ok := transaction[0].(string)
+		if !ok {
+			return nil, errors.New("expect first element in tx to be string")
+		}
 		opKey, err := Int(transaction[1])
 		if err != nil {
 			return nil, err
