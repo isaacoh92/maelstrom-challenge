@@ -120,7 +120,6 @@ func main() {
 	if err := n.Run(); err != nil {
 		log.Fatal(err)
 	}
-	time.Sleep(5 * time.Millisecond)
 	wg.Wait()
 }
 
