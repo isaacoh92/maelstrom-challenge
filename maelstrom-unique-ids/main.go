@@ -18,10 +18,10 @@ import (
 // (such as the one implemented in maelstrom-counter/id_gen.go),
 // but Snowflake is beautifully crafted :)
 
-var epoch int64 = time.Now().UnixMilli()
-var lastSeen int64 = time.Now().UnixMilli()
+var epoch = time.Now().UnixMilli()
+var lastSeen = time.Now().UnixMilli()
 var sequence = 0
-var mux *sync.RWMutex = &sync.RWMutex{}
+var mux = &sync.RWMutex{}
 
 func genID(id int) string {
 	mux.Lock()

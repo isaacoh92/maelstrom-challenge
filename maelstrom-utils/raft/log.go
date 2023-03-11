@@ -1,6 +1,9 @@
 package raft
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"log"
+)
 
 type Logs struct {
 	Entries []*Log `json:"entries"`
@@ -58,6 +61,9 @@ func (logs *Logs) Truncate(index int) {
 }
 
 func (logs *Logs) PrintLogs() string {
-	r, _ := json.Marshal(logs.Entries)
+	r, err := json.Marshal(logs.Entries)
+	if err != nil {
+		log.Printf("error encoding logs: %v", err)
+	}
 	return string(r)
 }

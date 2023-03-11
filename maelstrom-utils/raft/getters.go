@@ -9,7 +9,7 @@ func (r *Raft) IsLeader(lock ...bool) bool {
 		r.mux.RLock()
 		defer r.mux.RUnlock()
 	}
-	return r.role == ROLE_LEADER
+	return r.role == roleLeader
 }
 
 func (r *Raft) IsCandidate(lock ...bool) bool {
@@ -17,7 +17,7 @@ func (r *Raft) IsCandidate(lock ...bool) bool {
 		r.mux.RLock()
 		defer r.mux.RUnlock()
 	}
-	return r.role == ROLE_CANDIDATE
+	return r.role == roleCandidate
 }
 
 func (r *Raft) IsFollower(lock ...bool) bool {
@@ -25,7 +25,7 @@ func (r *Raft) IsFollower(lock ...bool) bool {
 		r.mux.RLock()
 		defer r.mux.RUnlock()
 	}
-	return r.role == ROLE_FOLLOWER
+	return r.role == roleFollower
 }
 
 func (r *Raft) Term(lock ...bool) int {

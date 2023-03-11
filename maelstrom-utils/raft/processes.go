@@ -2,9 +2,10 @@ package raft
 
 import "time"
 
-// Long-lasting processes each raft instance executes
+// ScheduleCandidate Long-lasting processes each raft instance executes
 // After the election timeout, a follower becomes a candidate and starts a new election term
 func (r *Raft) ScheduleCandidate() {
+	//nolint:all - this function is endless as long as our node is running
 	for range time.Tick(time.Millisecond * r.checkElectionTicker) {
 		if r.ElectionDeadlineExceeded(true) {
 			r.Logf("scheduling to become candidate...%v", r.IsLeader(true))
@@ -20,7 +21,7 @@ func (r *Raft) ScheduleCandidate() {
 	}
 }
 
-// As a leader, we must constantly ping our followers
+// ScheduleAppendEntries As a leader, we must constantly ping our followers
 func (r *Raft) ScheduleAppendEntries() {
 	for range time.Tick(time.Millisecond * r.leaderHeartbeatTicker) {
 		if r.IsLeader(true) {

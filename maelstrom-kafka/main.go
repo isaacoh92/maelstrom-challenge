@@ -11,13 +11,11 @@ import (
 )
 
 var (
-	wg  sync.WaitGroup
-	mux sync.RWMutex
+	wg sync.WaitGroup
 )
 
 func init() {
 	wg = sync.WaitGroup{}
-	mux = sync.RWMutex{}
 }
 
 func main() {
@@ -49,18 +47,16 @@ func main() {
 			return err
 		}
 
-		n.Reply(msg, map[string]any{
+		return n.Reply(msg, map[string]any{
 			"type":   "send_ok",
 			"offset": offset,
 		})
-
-		return nil
 	})
 
 	n.Handle("poll", func(msg maelstrom.Message) error {
 		type request struct {
-			Type    string         `json:"type"`
 			Offsets map[string]any `json:"offsets"`
+			Type    string         `json:"type"`
 		}
 
 		var body request
@@ -80,17 +76,17 @@ func main() {
 			}
 			result[key] = messages
 		}
-		n.Reply(msg, map[string]any{
+
+		return n.Reply(msg, map[string]any{
 			"type": "poll_ok",
 			"msgs": result,
 		})
-		return nil
 	})
 
 	n.Handle("commit_offsets", func(msg maelstrom.Message) error {
 		type request struct {
-			Type    string         `json:"type"`
 			Offsets map[string]any `json:"offsets"`
+			Type    string         `json:"type"`
 		}
 
 		var body request
@@ -105,10 +101,10 @@ func main() {
 			wg.Add(1)
 			go writeCommittedOffset(n, kv, key, offset)
 		}
-		n.Reply(msg, map[string]any{
+
+		return n.Reply(msg, map[string]any{
 			"type": "commit_offsets_ok",
 		})
-		return nil
 	})
 
 	n.Handle("list_committed_offsets", func(msg maelstrom.Message) error {
@@ -127,11 +123,10 @@ func main() {
 			result[key] = offset
 		}
 
-		n.Reply(msg, map[string]any{
+		return n.Reply(msg, map[string]any{
 			"type":    "list_committed_offsets_ok",
 			"offsets": result,
 		})
-		return nil
 	})
 	if err := n.Run(); err != nil {
 		logger.Fatal(err)
@@ -142,7 +137,10 @@ func main() {
 func writeCommittedOffset(n *maelstrom.Node, kv *maelstrom.KV, key string, offset int) {
 	defer wg.Done()
 	kvKey := fmt.Sprintf("committed_%s", key)
-	committed, _ := kv.ReadInt(context.Background(), kvKey)
+	committed, err := kv.ReadInt(context.Background(), kvKey)
+	if err != nil {
+		logger.Printf("could not find key for %s. Creating on CaS", kvKey)
+	}
 	if e := kv.CompareAndSwap(context.Background(), kvKey, committed, offset, true); e != nil {
 		wg.Add(1)
 		go writeCommittedOffset(n, kv, key, offset)
@@ -160,8 +158,8 @@ func readCommittedOffset(n *maelstrom.Node, kv *maelstrom.KV, key string) int {
 }
 
 type Log struct {
-	Offset   int     `json:"offset"`
 	Messages [][]int `json:"messages"`
+	Offset   int     `json:"offset"`
 }
 
 func writeLog(n *maelstrom.Node, kv *maelstrom.KV, key string, message int, resultChannel chan int, errorChannel chan error) {

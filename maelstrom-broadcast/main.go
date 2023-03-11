@@ -1,22 +1,26 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"github.com/isaacoh92/maelstrom-challenge/maelstrom-utils/topology"
+	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 	"log"
 	"sync"
 	"time"
-
-	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
 type message struct {
-	changed          bool
-	messages         []int
-	messageSet       map[int]bool
-	lastReceivedFrom string
 	mux              *sync.RWMutex
+	lastReceivedFrom string
+	messageSet       map[int]bool
+	messages         []int
+	changed          bool
+}
+
+type broadcastMessage struct {
+	Type     string `json:"type"`
+	Src      string `json:"src"`
+	Messages []int  `json:"messages"`
 }
 
 var (
@@ -64,7 +68,7 @@ func main() {
 	})
 
 	n.Handle("broadcast_all", func(msg maelstrom.Message) error {
-		var body BroadcastMessage
+		var body broadcastMessage
 		if err := json.Unmarshal(msg.Body, &body); err != nil {
 			return err
 		}
@@ -111,6 +115,9 @@ func main() {
 	n.Handle("topology", func(msg maelstrom.Message) error {
 		// increasing "level" of internode connectivity = lower stable-latency, but higher messages per operation
 		// decreasing level will have the opposite effect
+		//     for example, when executing the test with `--node-count 25 --time-limit 20 --rate 100 --latency 100`
+		//     a level of 2 yields latencies {0: 0, 0.5: 478, 0.95: 619, 0.99: 696, 1: 737} with 11.261326 msgs-per-op
+		//     a level of 3 yields latencies {0: 0, 0.5: 313, 0.95: 407, 0.99: 417, 1: 488} with 21.394722 msgs-per-op
 		setup(n, 2)
 		return n.Reply(msg, map[string]any{
 			"type": "topology_ok",
@@ -125,7 +132,9 @@ func main() {
 
 func broadcast(node *maelstrom.Node, neighbor string, body any) {
 	defer wg.Done()
-	node.SyncRPC(context.Background(), neighbor, body)
+	if err := node.Send(neighbor, body); err != nil {
+		log.Println("error broadcasting to node", node)
+	}
 }
 
 func broadcastAll(node *maelstrom.Node) {
@@ -141,7 +150,7 @@ func broadcastAll(node *maelstrom.Node) {
 					continue
 				}
 				wg.Add(1)
-				go broadcast(node, neighbor, BroadcastMessage{
+				go broadcast(node, neighbor, broadcastMessage{
 					Type:     "broadcast_all",
 					Messages: msgs,
 					Src:      node.ID(),
@@ -153,12 +162,6 @@ func broadcastAll(node *maelstrom.Node) {
 		m.changed = false
 		m.mux.Unlock()
 	}
-}
-
-type BroadcastMessage struct {
-	Type     string `json:"type"`
-	Messages []int  `json:"messages"`
-	Src      string `json:"src"`
 }
 
 func setup(node *maelstrom.Node, level int) {

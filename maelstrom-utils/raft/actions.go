@@ -18,7 +18,7 @@ func (r *Raft) BecomeCandidate() {
 
 	r.leader = "" // remove anyone we may have been following
 	r.votedFor = r.node.ID()
-	r.role = ROLE_CANDIDATE
+	r.role = roleCandidate
 
 	r.AdvanceTerm(r.term + 1)
 	r.Logf("Became candidate. Starting new term %d", r.term)
@@ -35,7 +35,7 @@ func (r *Raft) BecomeFollower(leader string, term int, lock ...bool) {
 	r.leader = leader
 	r.AdvanceTerm(term)
 	r.votedFor = ""
-	r.role = ROLE_FOLLOWER
+	r.role = roleFollower
 	r.ResetElectionDeadline()
 
 	r.matchIndex = nil
@@ -58,7 +58,7 @@ func (r *Raft) BecomeLeader() {
 
 	r.leader = ""
 	r.votedFor = ""
-	r.role = ROLE_LEADER
+	r.role = roleLeader
 
 	r.nextIndex = map[string]int{}
 	r.matchIndex = map[string]int{}
@@ -70,7 +70,7 @@ func (r *Raft) BecomeLeader() {
 	r.Logf("became leader on term %d", r.term)
 }
 
-// Request votes by making RPC calls to other nodes
+// RequestVotes requests votes via RPC calls to other nodes
 func (r *Raft) RequestVotes() {
 	done := make(chan bool)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*1000)
@@ -94,7 +94,7 @@ func (r *Raft) RequestVotes() {
 	}
 }
 
-func (r *Raft) requestVote(ctx context.Context, peer string, votes *[]string, done chan bool) error {
+func (r *Raft) requestVote(ctx context.Context, peer string, votes *[]string, done chan bool) {
 	responseChannel := make(chan maelstrom.Message)
 	r.mux.RLock()
 	request := VoteRequest{
@@ -113,14 +113,15 @@ func (r *Raft) requestVote(ctx context.Context, peer string, votes *[]string, do
 		return nil
 	}); err != nil {
 		r.Logf("Request vote to peer %s errored: %v", peer, err)
-		return err
+		return
 	}
 
 	select {
 	case msg := <-responseChannel:
 		var response VoteResponse
 		if jsonErr := json.Unmarshal(msg.Body, &response); jsonErr != nil {
-			return jsonErr
+			r.Logf("failed to decode vote response: %v", jsonErr)
+			return
 		}
 		r.Logf("Received vote response from peer %s: %v", peer, response)
 
@@ -142,10 +143,9 @@ func (r *Raft) requestVote(ctx context.Context, peer string, votes *[]string, do
 	case <-ctx.Done():
 		r.Logf("closing vote request due to parent context reaching deadline...")
 	}
-	return nil
 }
 
-// If this node hasn't voted yet in this term, then it votes for the candidate
+// SubmitVote If this node hasn't voted yet in this term, then it votes for the candidate
 // After voting, resets election timeout
 func (r *Raft) SubmitVote(msg maelstrom.Message) error {
 	var request VoteRequest
@@ -220,11 +220,11 @@ func (r *Raft) AppendEntries() {
 	r.wait.Wait()
 }
 
-func (r *Raft) appendEntry(ctx context.Context, peer string, acks *[]string, done chan bool) error {
+func (r *Raft) appendEntry(ctx context.Context, peer string, acks *[]string, done chan bool) {
 	defer r.wait.Done()
 	if !r.IsLeader(true) {
 		r.Logf("not going to append this entry because we're not a leader")
-		return nil
+		return
 	}
 
 	r.mux.RLock()
@@ -247,7 +247,8 @@ func (r *Raft) appendEntry(ctx context.Context, peer string, acks *[]string, don
 		responseChannel <- m
 		return nil
 	}); err != nil {
-		return err
+		r.Logf("error with RPC append entry request to peer %s: %v", peer, err)
+		return
 	}
 
 	select {
@@ -256,7 +257,8 @@ func (r *Raft) appendEntry(ctx context.Context, peer string, acks *[]string, don
 		defer r.Unlock(8)
 		var response AppendEntryResponse
 		if jsonErr := json.Unmarshal(msg.Body, &response); jsonErr != nil {
-			return jsonErr
+			r.Logf("error decoding append entries resp %v", jsonErr)
+			return
 		}
 		r.maybeStepDown(response.Term)
 
@@ -283,8 +285,6 @@ func (r *Raft) appendEntry(ctx context.Context, peer string, acks *[]string, don
 	case <-ctx.Done():
 		r.Logf("parent context for append entry timed out when sending to %s", peer)
 	}
-
-	return nil
 }
 
 func (r *Raft) AdvanceStateMachine(lock ...bool) {
@@ -299,7 +299,9 @@ func (r *Raft) AdvanceStateMachine(lock ...bool) {
 		r.lastApplied++
 		req := r.logs.Get(r.lastApplied).Operation
 		for _, txn := range req {
-			r.stateMachine.Apply(txn.([]any))
+			if _, err := r.stateMachine.Apply(txn.([]any)); err != nil {
+				r.Logf("error advancing state machine %v", err)
+			}
 		}
 	}
 }
