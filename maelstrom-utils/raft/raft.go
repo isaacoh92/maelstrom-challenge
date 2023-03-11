@@ -137,7 +137,7 @@ type AppendEntryResponse struct {
 func InitRaft(node *maelstrom.Node) *Raft {
 	r := &Raft{
 		mux:                   sync.RWMutex{},
-		stateMachine:          &Map{Data: map[int]int{}},
+		stateMachine:          Map{Data: map[int]int{}},
 		logs:                  InitLogs(),
 		node:                  node,
 		votedFor:              "",
@@ -230,7 +230,7 @@ func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
 			if err != nil {
 				return err
 			}
-			txs = append(txs, res)
+			txs = append(txs, res.([]any))
 		}
 		r.commitIndex++
 
