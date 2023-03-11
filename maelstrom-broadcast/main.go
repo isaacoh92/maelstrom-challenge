@@ -132,7 +132,6 @@ func main() {
 
 func broadcast(node *maelstrom.Node, neighbor string, body any) {
 	defer wg.Done()
-	//node.SyncRPC(context.Background(), neighbor, body)
 	if err := node.Send(neighbor, body); err != nil {
 		log.Println("error broadcasting to node", node)
 	}
