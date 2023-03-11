@@ -25,8 +25,8 @@ type Map struct {
 	Data map[int]int
 }
 
-func (m *Map) Apply(operation []any) ([]any, error) {
-	//operation := op.([]any)
+func (m *Map) Apply(op any) (any, error) {
+	operation := op.([]any)
 	opType, ok := operation[0].(string)
 	if !ok {
 		return nil, errors.New("first element in operation should be string")
@@ -58,7 +58,7 @@ func (m *Map) Apply(operation []any) ([]any, error) {
 // nolint:all ignore field alignment for this struct to group fields logically
 type Raft struct {
 	// components
-	stateMachine *Map
+	stateMachine Map
 	logs         *Logs
 	node         *maelstrom.Node
 

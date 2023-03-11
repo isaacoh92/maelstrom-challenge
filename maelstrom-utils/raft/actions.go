@@ -121,6 +121,7 @@ func (r *Raft) requestVote(ctx context.Context, peer string, votes *[]string, do
 		var response VoteResponse
 		if jsonErr := json.Unmarshal(msg.Body, &response); jsonErr != nil {
 			r.Logf("failed to decode vote response: %v", jsonErr)
+			return
 		}
 		r.Logf("Received vote response from peer %s: %v", peer, response)
 
