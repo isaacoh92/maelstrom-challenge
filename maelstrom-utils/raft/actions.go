@@ -18,7 +18,7 @@ func (r *Raft) BecomeCandidate() {
 
 	r.leader = "" // remove anyone we may have been following
 	r.votedFor = r.node.ID()
-	r.role = ROLE_CANDIDATE
+	r.role = roleCandidate
 
 	r.AdvanceTerm(r.term + 1)
 	r.Logf("Became candidate. Starting new term %d", r.term)
@@ -35,7 +35,7 @@ func (r *Raft) BecomeFollower(leader string, term int, lock ...bool) {
 	r.leader = leader
 	r.AdvanceTerm(term)
 	r.votedFor = ""
-	r.role = ROLE_FOLLOWER
+	r.role = roleFollower
 	r.ResetElectionDeadline()
 
 	r.matchIndex = nil
@@ -58,7 +58,7 @@ func (r *Raft) BecomeLeader() {
 
 	r.leader = ""
 	r.votedFor = ""
-	r.role = ROLE_LEADER
+	r.role = roleLeader
 
 	r.nextIndex = map[string]int{}
 	r.matchIndex = map[string]int{}

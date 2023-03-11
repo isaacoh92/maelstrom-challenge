@@ -14,21 +14,9 @@ import (
 )
 
 const (
-	ERR_TIMEOUT                 = 0
-	ERR_NODE_NOT_FOUND          = 1
-	ERR_NOT_SUPPORTED           = 10
-	ERR_TEMPORARILY_UNAVAILABLE = 11
-	ERR_MALFORMED_REQUEST       = 12
-	ERR_CRASH                   = 13
-	ERR_ABORT                   = 14
-	ERR_KEY_DOES_NOT_EXIST      = 20
-	ERR_KEY_ALREADY_EXISTS      = 21
-	ERR_PRECONDITION_FAILED     = 22
-	ERR_TXN_CONFLICT            = 30
-
-	ROLE_FOLLOWER  = 0
-	ROLE_CANDIDATE = 1
-	ROLE_LEADER    = 2
+	roleFollower  = 0
+	roleCandidate = 1
+	roleLeader    = 2
 )
 
 var epoch = time.Now().UnixMilli()
@@ -37,9 +25,12 @@ type Map struct {
 	Data map[int]int
 }
 
-func (m *Map) Apply(op any) (any, error) {
-	operation := op.([]any)
-	opType := operation[0].(string)
+func (m *Map) Apply(operation []any) ([]any, error) {
+	//operation := op.([]any)
+	opType, ok := operation[0].(string)
+	if !ok {
+		return nil, errors.New("first element in operation should be string")
+	}
 	opKey, err := Int(operation[1])
 	if err != nil {
 		return []any{}, err
@@ -49,9 +40,8 @@ func (m *Map) Apply(op any) (any, error) {
 	case "r":
 		if val, ok := m.Data[opKey]; ok {
 			return []any{"r", opKey, val}, nil
-		} else {
-			return []any{"r", opKey, 0}, nil
 		}
+		return []any{"r", opKey, 0}, nil
 	case "w":
 		val, err := Int(operation[2])
 		if err != nil {
@@ -60,14 +50,11 @@ func (m *Map) Apply(op any) (any, error) {
 		m.Data[opKey] = val
 		return []any{"w", opKey, val}, nil
 	default:
-		return []any{}, maelstrom.NewRPCError(ERR_NOT_SUPPORTED, fmt.Sprintf("%s not supported", opType))
+		return []any{}, fmt.Errorf("%s not supported", opType)
 	}
 }
 
 type Raft struct {
-	mux  sync.RWMutex
-	wait sync.WaitGroup
-
 	// components
 	stateMachine Map
 	logs         *Logs
@@ -96,14 +83,17 @@ type Raft struct {
 	//////////////////////
 	//// Leader State ////
 	//////////////////////
-	// index of highest log entry known to be committed (initialized to 0)
-	commitIndex int
-	// index of the highest log entry applied to state machine -- Do we need this? Since our state machine is just a local map
-	lastApplied int
 	// Map of nodes to the next index to replicate (initialized to leader last log index + 1)
 	nextIndex map[string]int
 	// Map of other nodes to the highest log entry known to be replicated on that node (initialized to 0)
 	matchIndex map[string]int
+	// index of highest log entry known to be committed (initialized to 0)
+	commitIndex int
+	// index of the highest log entry applied to state machine -- Do we need this? Since our state machine is just a local map
+	lastApplied int
+
+	mux  sync.RWMutex
+	wait sync.WaitGroup
 
 	sufficientAcks  bool
 	sufficientVotes bool
@@ -126,12 +116,12 @@ type VoteResponse struct {
 
 type AppendEntryRequest struct {
 	Type         string `json:"type"`
-	Term         int    `json:"term"`
 	Leader       string `json:"leader"`
+	Entries      []*Log `json:"entries"`
+	Term         int    `json:"term"`
 	PrevLogIndex int    `json:"prev_log_index"`
 	PrevLogTerm  int    `json:"prev_log_term"`
 	LeaderCommit int    `json:"leader_commit"`
-	Entries      []*Log `json:"entries"`
 }
 
 type AppendEntryResponse struct {
@@ -150,7 +140,7 @@ func InitRaft(node *maelstrom.Node) *Raft {
 		node:                  node,
 		votedFor:              "",
 		leader:                "",
-		role:                  ROLE_FOLLOWER,
+		role:                  roleFollower,
 		term:                  0,
 		checkElectionTicker:   10,
 		stepDownTicker:        100,
@@ -184,7 +174,7 @@ func generateRandomTimeout(min int, max int) time.Duration {
 }
 
 func (r *Raft) Logf(message string, params ...any) {
-	log.Println(fmt.Sprintf("%v: %s", time.Now().UnixMilli()-epoch, fmt.Sprintf(message, params...)))
+	log.Printf("%v: %s", time.Now().UnixMilli()-epoch, fmt.Sprintf(message, params...))
 }
 
 func (r *Raft) Lock(i int) {
