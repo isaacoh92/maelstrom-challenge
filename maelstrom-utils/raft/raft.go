@@ -224,13 +224,13 @@ func (r *Raft) HandleClientRequest(msg maelstrom.Message) error {
 			Operation: req["txn"].([]any),
 		})
 
-		txs := [][]any{}
+		txs := []any{}
 		for _, txn := range req["txn"].([]any) {
 			res, err := r.stateMachine.Apply(txn.([]any))
 			if err != nil {
 				return err
 			}
-			txs = append(txs, res.([]any))
+			txs = append(txs, res)
 		}
 		r.commitIndex++
 
